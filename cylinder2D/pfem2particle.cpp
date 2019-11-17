@@ -470,6 +470,7 @@ pfem2Solver::pfem2Solver()
 	feVx (1),
 	feVy (1),
 	feP (1),
+	fe(FE_Q<2>(1), 1),
 	dof_handlerVx (tria),
 	dof_handlerVy (tria),
 	dof_handlerP (tria),
@@ -506,7 +507,7 @@ void pfem2Solver::seed_particles_into_cell (const typename DoFHandler<2>::cell_i
 	}
 }
 
-bool pfem2Solver::check_cell_for_empty_parts (const typename DoFHandler<2>::cell_iterator &cell)
+  bool pfem2Solver::check_cell_for_empty_parts (const typename DoFHandler<2>::cell_iterator &cell)
 {
 	bool res = false;
 	
@@ -526,12 +527,11 @@ bool pfem2Solver::check_cell_for_empty_parts (const typename DoFHandler<2>::cell
 		if(particlesInParts[{num_x,num_y}] > MAX_PARTICLES_PER_CELL_PART) particles_to_be_deleted.push_back(particleIndex);
 	}
 	
-	FESystem<2> fe(FE_Q<2>(1), 1);
 	double shapeValue;
 	
 	//проверка каждой части ячейки на количество частиц: при 0 - подсевание 1 частицы в центр
 	for(unsigned int i = 0; i < quantities[0]; i++){
-		for(unsigned int j = 0; j < quantities[1]; j++){
+		for(unsigned int j = 0; j < quantities[1]; j++){			
 			if(!particlesInParts[{i,j}]){
 				pfem2Particle* particle = new pfem2Particle(mapping.transform_unit_to_real_cell(cell, Point<2>((i + 1.0/2)*hx, (j+1.0/2)*hy)), Point<2>((i + 1.0/2)*hx, (j+1.0/2)*hy), ++particleCount);
 				particle_handler.insert_particle(particle, cell);
@@ -549,15 +549,13 @@ bool pfem2Solver::check_cell_for_empty_parts (const typename DoFHandler<2>::cell
 	}
 	
 	//удаление лишних частиц
-	if(!particles_to_be_deleted.empty()){
-		for(unsigned int i = 0; i < particles_to_be_deleted.size(); ++i){
-			auto it = particles_to_be_deleted.at(i);
-			(*it).second->set_map_position(it);
-			particle_handler.remove_particle((*it).second);
-		}
-		
-		res = true;
+	for(unsigned int i = 0; i < particles_to_be_deleted.size(); ++i){
+		auto it = particles_to_be_deleted.at(i);
+		(*it).second->set_map_position(it);
+		particle_handler.remove_particle((*it).second);
 	}
+		
+	if(!particles_to_be_deleted.empty()) res = true;
 	
 	return res;
 }
@@ -585,8 +583,6 @@ void pfem2Solver::correct_particles_velocities()
 {
 	TimerOutput::Scope timer_section(*timer, "Particles' velocities correction");
 	
-	FESystem<2>   fe(FE_Q<2>(1), 1);
-	
 	double shapeValue;
 			
 	typename DoFHandler<2>::cell_iterator cell = dof_handlerVx.begin(tria.n_levels()-1), endc = dof_handlerVx.end(tria.n_levels()-1);
@@ -610,8 +606,6 @@ void pfem2Solver::move_particles() //перенос частиц
 {
 	TimerOutput::Scope timer_section(*timer, "Particles' movement");	
 	
-	FESystem<2>   fe(FE_Q<2>(1), 1);
-
 	Tensor<1,2> vel_in_part;
 	
 	double shapeValue;
@@ -648,7 +642,7 @@ void pfem2Solver::move_particles() //перенос частиц
 	typename DoFHandler<2>::cell_iterator cell = dof_handlerVx.begin(tria.n_levels()-1), endc = dof_handlerVx.end(tria.n_levels()-1);
 	
 	for (; cell != endc; ++cell) check_cell_for_empty_parts(cell);
-
+	
 	//std::cout << "Finished moving particles" << std::endl;
 }
 
@@ -656,8 +650,6 @@ void pfem2Solver::distribute_particle_velocities_to_grid() //перенос ск
 {	
 	TimerOutput::Scope timer_section(*timer, "Distribution of particles' velocities to grid nodes");
 		
-	FESystem<2>   fe(FE_Q<2>(1), 1);
-	
 	Vector<double> node_velocityX, node_velocityY;
 	Vector<double> node_weights;
 	

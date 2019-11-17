@@ -34,8 +34,8 @@ subsection Boundary Values
 end
 
 subsection Particles
-	set Number of particles in the x direction = 1
-	set Number of particles in the y direction = 1
+	set Number of particles in the x direction = 2
+	set Number of particles in the y direction = 2
 end
 
 subsection The criterion of record in the file
@@ -43,5 +43,5 @@ subsection The criterion of record in the file
 end
 
 subsection The file with mesh
-	set Name of the file = 3squarescylnew.unv
+	set Name of the file = scaled3.unv
 end

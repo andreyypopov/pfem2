@@ -37,7 +37,6 @@
 #include <stdlib.h>
 #include <string>
 
-
 using namespace dealii;
 
 class parabolicBC : public Function<2>
@@ -51,7 +50,8 @@ public:
 
 double parabolicBC::value(const Point<2> &p, const unsigned int) const
 {
-	return 1.0; //3.0/8.0 * (4.0 - p[1]*p[1]);//
+	return 1.0;
+	//return 0.06 * (25.0 - p[1]*p[1]);
 }
 
 double parabolicBC::ddy(const Point<2> &p) const
@@ -96,11 +96,9 @@ public:
 	double mu() const {return mu_; };
 	double rho() const {return rho_; };
 	
-	SparsityPattern sparsity_patternVx, sparsity_patternCorrVx, sparsity_patternVy, sparsity_patternCorrVy, sparsity_patternP;
-	SparseMatrix<double> system_mVx, system_mCorrVx, system_mVy, system_mCorrVy, system_mP;
+	SparsityPattern sparsity_patternVx, sparsity_patternVy, sparsity_patternP;
+	SparseMatrix<double> system_mVx, system_mVy, system_mP;
 	Vector<double> system_rVx, system_rVy, system_rP;
-	
-	ConstraintMatrix constraintsVx, constraintsVy, constraintsP, constraintsCorrVx, constraintsCorrVy;
 	
 private:
 	double mu_, rho_, final_time_, accuracy_;
@@ -147,13 +145,6 @@ void cylinder2D::declare_parameters (ParameterHandler &prm)
 		prm.declare_entry ("Dynamic viscosity", "1.0");
 		prm.declare_entry ("Density", "1.0");
 	}
-	prm.leave_subsection();
-	
-//	prm.enter_subsection("Domain split");
-//	{
-//		prm.declare_entry ("Number of partitiones in the x direction", "29");
-//		prm.declare_entry ("Number of partitiones in the y direction", "29");
-//	}
 	prm.leave_subsection();
 	
 	prm.enter_subsection("Time parameters");
@@ -215,13 +206,6 @@ void cylinder2D::get_parameters (ParameterHandler &prm)
 		rho_ = prm.get_double ("Density");
 	}
 	prm.leave_subsection();
-	
-//	prm.enter_subsection("Domain split");
-//	{
-//		num_of_part_x_ = prm.get_integer ("Number of partitiones in the x direction");
-//		num_of_part_y_ = prm.get_integer ("Number of partitiones in the y direction");
-//	}
-//	prm.leave_subsection();
 	
 	prm.enter_subsection("Time parameters");
 	{
@@ -288,7 +272,7 @@ void cylinder2D::build_grid ()
 	std::ifstream f(mesh_file_);
 	gridin.read_unv(f);
 	f.close();
-
+	
 	std::cout << "The mesh contains " << tria.n_active_cells() << " cells" << std::endl;
 }
 
@@ -297,22 +281,20 @@ void cylinder2D::setup_system()
 	TimerOutput::Scope timer_section(*timer, "System setup");
 
 	dof_handlerVx.distribute_dofs (feVx);
-	std::cout << "Number of degrees of freedom Vx: "
-			  << dof_handlerVx.n_dofs()
-			  << std::endl;
+	std::cout << "Number of degrees of freedom Vx: " << dof_handlerVx.n_dofs() << std::endl;
 			  
 	dof_handlerVy.distribute_dofs (feVy);
-	std::cout << "Number of degrees of freedom Vy: "
-			  << dof_handlerVy.n_dofs()
-			  << std::endl;
+	std::cout << "Number of degrees of freedom Vy: " << dof_handlerVy.n_dofs() << std::endl;
 			  
 	dof_handlerP.distribute_dofs (feP);
-	std::cout << "Number of degrees of freedom P: "
-			  << dof_handlerP.n_dofs()
-			  << std::endl;
+	std::cout << "Number of degrees of freedom P: " << dof_handlerP.n_dofs() << std::endl;
 
-	//Vx	  
+	//Vx
 	DynamicSparsityPattern dspVx(dof_handlerVx.n_dofs());
+	DoFTools::make_sparsity_pattern (dof_handlerVx, dspVx);
+	sparsity_patternVx.copy_from(dspVx);
+	
+	system_mVx.reinit (sparsity_patternVx);
 	
 	solutionVx.reinit (dof_handlerVx.n_dofs());
 	predictionVx.reinit (dof_handlerVx.n_dofs());
@@ -320,211 +302,29 @@ void cylinder2D::setup_system()
 	old_solutionVx.reinit (dof_handlerVx.n_dofs());
     system_rVx.reinit (dof_handlerVx.n_dofs());
     
-    constraintsVx.clear();
-    DoFTools::make_hanging_node_constraints(dof_handlerVx, constraintsVx);
-    //VectorTools::interpolate_boundary_values(dof_handlerVx, 1, Functions::ConstantFunction<2>(1.0), constraintsVx);
-    VectorTools::interpolate_boundary_values(dof_handlerVx, 1, parabolicBC(), constraintsVx);
-    VectorTools::interpolate_boundary_values(dof_handlerVx, 3, Functions::ConstantFunction<2>(velX_cyl_), constraintsVx);
-    //VectorTools::interpolate_boundary_values(dof_handlerVx, 4, Functions::ConstantFunction<2>(velX_wall_), constraintsVx);
-    constraintsVx.close();
-    
-    constraintsCorrVx.clear();
-    DoFTools::make_hanging_node_constraints(dof_handlerVx, constraintsCorrVx);
-    VectorTools::interpolate_boundary_values(dof_handlerVx, 1, Functions::ConstantFunction<2>(velX_inlet_), constraintsCorrVx);
-    VectorTools::interpolate_boundary_values(dof_handlerVx, 3, Functions::ConstantFunction<2>(velX_cyl_), constraintsCorrVx);
-    //VectorTools::interpolate_boundary_values(dof_handlerVx, 4, Functions::ConstantFunction<2>(velX_wall_), constraintsCorrVx);
-    constraintsCorrVx.close();
-
-	DoFTools::make_sparsity_pattern (dof_handlerVx, dspVx, constraintsVx, false);
-	sparsity_patternVx.copy_from(dspVx);
-	
-	system_mVx.reinit (sparsity_patternVx);
-	
-	DoFTools::make_sparsity_pattern (dof_handlerVx, dspVx, constraintsCorrVx, false);
-	sparsity_patternCorrVx.copy_from(dspVx);
-	
-	system_mCorrVx.reinit (sparsity_patternCorrVx);
-	
-	//assembling the system matrix (prediction Vx)
-	system_mVx=0.0;
-	
-	{
-		DoFHandler<2>::active_cell_iterator cell = dof_handlerVx.begin_active();
-		DoFHandler<2>::active_cell_iterator endc = dof_handlerVx.end();
-		
-		for (; cell!=endc; ++cell) {				
-			feVx_values.reinit (cell);
-			local_matrixVx = 0.0;
-			
-			for (unsigned int q_index=0; q_index<n_q_points; ++q_index) {
-				for (unsigned int i=0; i<dofs_per_cellVx; ++i) {						
-					for (unsigned int j=0; j<dofs_per_cellVx; ++j) {	//diagonalization of the mass matrix is used
-						local_matrixVx(i,i) += rho() * feVx_values.shape_value (i,q_index) * feVx_values.shape_value (j,q_index) * feVx_values.JxW(q_index);
-						//implicit account for tau_ij
-						local_matrixVx(i,j) += mu() * time_step * (feVx_values.shape_grad (i,q_index)[1] * feVx_values.shape_grad (j,q_index)[1] + 
-					                       4.0/3.0 * feVx_values.shape_grad (i,q_index)[0] * feVx_values.shape_grad (j,q_index)[0]) * feVx_values.JxW (q_index);
-					}//j
-				}//i
-			}//q_index
-				
-			cell->get_dof_indices (local_dof_indicesVx);
-			constraintsVx.distribute_local_to_global(local_matrixVx, local_dof_indicesVx, system_mVx);
-		}//cell
-	}// end of assembling the system matrix (prediction Vx)
-	
-	//assembling the system matrix (correction Vx)
-	system_mCorrVx = 0.0;
-	
-	{		
-		DoFHandler<2>::active_cell_iterator cell = dof_handlerVx.begin_active();
-		DoFHandler<2>::active_cell_iterator endc = dof_handlerVx.end();
-		
-		for (; cell!=endc; ++cell) {	
-			feVx_values.reinit (cell);
-			local_matrixVx = 0.0;
-		
-			for (unsigned int q_index=0; q_index<n_q_points; ++q_index) {
-				for (unsigned int i=0; i<dofs_per_cellVx; ++i) {					
-					for (unsigned int j=0; j<dofs_per_cellVx; ++j) {	//diagonalization of the mass matrix is used
-						local_matrixVx(i,i) += feVx_values.shape_value (i,q_index) * feVx_values.shape_value (j,q_index) * feVx_values.JxW(q_index);
-					}//j
-				}//i
-			}//q_index
-
-			cell->get_dof_indices (local_dof_indicesVx);
-			constraintsCorrVx.distribute_local_to_global(local_matrixVx, local_dof_indicesVx, system_mCorrVx);
-
-		}//cell
-			
-	}//end of assembling the system matrix (correction Vx)
-    
     //Vy
-    DynamicSparsityPattern dspVy(dof_handlerVy.n_dofs());
-		
+	DynamicSparsityPattern dspVy(dof_handlerVy.n_dofs());
+	DoFTools::make_sparsity_pattern (dof_handlerVy, dspVy);
+	sparsity_patternVy.copy_from(dspVy);
+	
+	system_mVy.reinit (sparsity_patternVy);
+	
 	solutionVy.reinit (dof_handlerVy.n_dofs());
 	predictionVy.reinit (dof_handlerVy.n_dofs());
 	correctionVy.reinit (dof_handlerVy.n_dofs());
 	old_solutionVy.reinit (dof_handlerVy.n_dofs());
     system_rVy.reinit (dof_handlerVy.n_dofs());
     
-    constraintsVy.clear();
-    DoFTools::make_hanging_node_constraints(dof_handlerVy, constraintsVy);
-    VectorTools::interpolate_boundary_values(dof_handlerVy, 1, Functions::ConstantFunction<2>(velY_inlet_), constraintsVy);
-    VectorTools::interpolate_boundary_values(dof_handlerVy, 3, Functions::ConstantFunction<2>(velY_cyl_), constraintsVy);
-    VectorTools::interpolate_boundary_values(dof_handlerVy, 4, Functions::ConstantFunction<2>(velY_wall_), constraintsVy);
-    constraintsVy.close();
-    
-    constraintsCorrVy.clear();
-    DoFTools::make_hanging_node_constraints(dof_handlerVy, constraintsCorrVy);
-    VectorTools::interpolate_boundary_values(dof_handlerVy, 1, Functions::ConstantFunction<2>(velY_inlet_), constraintsCorrVy);
-    VectorTools::interpolate_boundary_values(dof_handlerVy, 3, Functions::ConstantFunction<2>(velY_cyl_), constraintsCorrVy);
-    VectorTools::interpolate_boundary_values(dof_handlerVy, 4, Functions::ConstantFunction<2>(velY_wall_), constraintsCorrVy);
-    constraintsCorrVy.close();
-	
-	DoFTools::make_sparsity_pattern (dof_handlerVy, dspVy, constraintsVy, false);
-	sparsity_patternVy.copy_from(dspVy);
-	
-	system_mVy.reinit (sparsity_patternVy);
-	
-	DoFTools::make_sparsity_pattern (dof_handlerVy, dspVy, constraintsCorrVy, false);
-	sparsity_patternCorrVy.copy_from(dspVy);
-	
-	system_mCorrVy.reinit (sparsity_patternCorrVy);
-	
-	//assembling the system matrix (prediction Vy)
-	system_mVy=0.0;
-	
-	{
-		DoFHandler<2>::active_cell_iterator cell = dof_handlerVy.begin_active();
-		DoFHandler<2>::active_cell_iterator endc = dof_handlerVy.end();
-		
-		for (; cell!=endc; ++cell) {				
-			feVy_values.reinit (cell);
-			local_matrixVy = 0.0;
-
-			for (unsigned int q_index=0; q_index<n_q_points; ++q_index) {
-				for (unsigned int i=0; i<dofs_per_cellVy; ++i) {		
-					for (unsigned int j=0; j<dofs_per_cellVy; ++j) {	//diagonalization of the mass matrix is used
-						local_matrixVy(i,i) += rho() * feVy_values.shape_value (i,q_index) * feVy_values.shape_value (j,q_index) * feVy_values.JxW(q_index);
-						//implicit account for tau_ij
-						local_matrixVy(i,j) += mu() * time_step * (feVy_values.shape_grad (i,q_index)[0] * feVy_values.shape_grad (j,q_index)[0] + 
-										   4.0/3.0 * feVy_values.shape_grad (i,q_index)[1] * feVy_values.shape_grad (j,q_index)[1]) * feVy_values.JxW (q_index);																			
-					}//j
-				}//i
-			}//q_index
-
-			cell->get_dof_indices (local_dof_indicesVy);
-			constraintsVy.distribute_local_to_global(local_matrixVy, local_dof_indicesVy, system_mVy);
-		}//cell
-	}//end of assembling the system matrix (prediction Vy)
-	
-	//assembling the system matrix (correction Vy)
-	system_mCorrVy = 0.0;
-	
-	{	
-		DoFHandler<2>::active_cell_iterator cell = dof_handlerVy.begin_active();
-		DoFHandler<2>::active_cell_iterator endc = dof_handlerVy.end();
-		
-		for (; cell!=endc; ++cell) {
-			feVy_values.reinit (cell);
-			local_matrixVy = 0.0;
-		
-			for (unsigned int q_index=0; q_index<n_q_points; ++q_index) {
-				for (unsigned int i=0; i<dofs_per_cellVy; ++i) {
-					for (unsigned int j=0; j<dofs_per_cellVy; ++j) {	//diagonalization of the mass matrix is used
-						local_matrixVy(i,i) += feVy_values.shape_value (i,q_index) * feVy_values.shape_value (j,q_index) * feVy_values.JxW(q_index);
-					}//j
-				}//i
-			}//q_index
-      
-			cell->get_dof_indices (local_dof_indicesVy);
-			constraintsCorrVy.distribute_local_to_global(local_matrixVy, local_dof_indicesVy, system_mCorrVy);
-
-		}//cell
-				
-	}//end of assembling the system matrix (correction Vy)
-	
-	//P
-    DynamicSparsityPattern dspP(dof_handlerP.n_dofs());
-
-	solutionP.reinit (dof_handlerP.n_dofs());
-	old_solutionP.reinit (dof_handlerP.n_dofs());
-    system_rP.reinit (dof_handlerP.n_dofs());
-    
-    constraintsP.clear();
-    DoFTools::make_hanging_node_constraints(dof_handlerP, constraintsP);
-    //VectorTools::interpolate_boundary_values(dof_handlerP, 1, Functions::ConstantFunction<2>(0.0), constraintsP);
-    VectorTools::interpolate_boundary_values(dof_handlerP, 2, Functions::ConstantFunction<2>(press_outlet_), constraintsP);
-    constraintsP.close();
-
-	DoFTools::make_sparsity_pattern (dof_handlerP, dspP, constraintsP, false);
+    //P
+	DynamicSparsityPattern dspP(dof_handlerP.n_dofs());
+	DoFTools::make_sparsity_pattern (dof_handlerP, dspP);
 	sparsity_patternP.copy_from(dspP);
 	
 	system_mP.reinit (sparsity_patternP);
 	
-	//assembling the system matrix (P)
-	system_mP=0.0;
-	
-	{
-		DoFHandler<2>::active_cell_iterator cell = dof_handlerP.begin_active();
-		DoFHandler<2>::active_cell_iterator endc = dof_handlerP.end();
-		
-		for (; cell!=endc; ++cell) {
-			feP_values.reinit (cell);
-			local_matrixP = 0.0;
-					
-			for (unsigned int q_index=0; q_index<n_q_points; ++q_index) {
-				for (unsigned int i=0; i<dofs_per_cellP; ++i) {
-					for (unsigned int j=0; j<dofs_per_cellP; ++j) {
-						local_matrixP(i,j) += feP_values.shape_grad (i,q_index) * feP_values.shape_grad (j,q_index) * feP_values.JxW(q_index);						
-					}//j
-				}//i
-			}//q_index
-
-			cell->get_dof_indices (local_dof_indicesP);
-			constraintsP.distribute_local_to_global(local_matrixP, local_dof_indicesP, system_mP);
-		}//cell
-	}//end of assembling the system matrix (P)
+	solutionP.reinit (dof_handlerP.n_dofs());
+	old_solutionP.reinit (dof_handlerP.n_dofs());
+    system_rP.reinit (dof_handlerP.n_dofs());
     
     //determine the numbers of DoFs near the point of flow deceleration
     {
@@ -597,17 +397,16 @@ void cylinder2D::assemble_system()
 		innerVy = solutionVy;
 
 		//Vx
-		system_rVx=0.0;
+		system_mVx = 0.0;
+		system_rVx = 0.0;
+		
 		{
 			DoFHandler<2>::active_cell_iterator cell = dof_handlerVx.begin_active();
 			DoFHandler<2>::active_cell_iterator endc = dof_handlerVx.end();
 			
-			int number = 0;
-			
-			for (; cell!=endc; ++cell,++number) {
+			for (; cell!=endc; ++cell) {
 				feVx_values.reinit (cell);
-				feVy_values.reinit (cell);
-				feP_values.reinit (cell);
+				local_matrixVx = 0.0;
 				local_rhsVx = 0.0;
 			
 				for (unsigned int q_index=0; q_index<n_q_points; ++q_index) {
@@ -618,15 +417,14 @@ void cylinder2D::assemble_system()
 						for (unsigned int j=0; j<dofs_per_cellVx; ++j) {
 							const Tensor<0,2> Nj_vel = feVx_values.shape_value (j,q_index);
 							const Tensor<1,2> Nj_vel_grad = feVx_values.shape_grad (j,q_index);
-							//const Tensor<1,2> Nj_p_grad = feP_values.shape_grad (j,q_index);
-							
-							//explicit account for tau_ij
-							//local_rhsVx(i) -= mu * time_step * (Ni_vel_grad[1] * Nj_vel_grad[1] + 4.0/3.0 * Ni_vel_grad[0] * Nj_vel_grad[0]) * old_solutionVx(cell->vertex_dof_index(j,0)) * feVx_values.JxW (q_index);
-							//local_rhsVx(i) -= mu() * time_step * (Ni_vel_grad[1] * Nj_vel_grad[0] - 2.0/3.0 * Ni_vel_grad[0] * Nj_vel_grad[1]) * old_solutionVy(cell->vertex_dof_index(j,0)) * feVx_values.JxW (q_index);
-							local_rhsVx(i) -= mu() * time_step * (Ni_vel_grad[1] * Nj_vel_grad[0] - 2.0/3.0 * Ni_vel_grad[0] * Nj_vel_grad[1]) * innerVy(cell->vertex_dof_index(j,0)) * feVx_values.JxW (q_index);
+
+							local_matrixVx(i,j) += rho() * Ni_vel * Nj_vel * feVx_values.JxW(q_index);
+							//implicit account for tau_ij
+							local_matrixVx(i,j) += mu() * time_step * (Ni_vel_grad[1] * Nj_vel_grad[1] + 4.0/3.0 * Ni_vel_grad[0] * Nj_vel_grad[0]) * feVx_values.JxW (q_index);
 							
 							local_rhsVx(i) += rho() * Nj_vel * Ni_vel * old_solutionVx(cell->vertex_dof_index(j,0)) * feVx_values.JxW (q_index);
-							//local_rhsVx(i) -= time_step * Ni_vel * Nj_p_grad[0] * old_solutionP(cell->vertex_dof_index(j,0)) * feVx_values.JxW (q_index);
+							//explicit account for tau_ij
+							local_rhsVx(i) -= mu() * time_step * (Ni_vel_grad[1] * Nj_vel_grad[0] - 2.0/3.0 * Ni_vel_grad[0] * Nj_vel_grad[1]) * innerVy(cell->vertex_dof_index(j,0)) * feVx_values.JxW (q_index);
 						}//j
 					}//i
 				}//q_index
@@ -639,8 +437,6 @@ void cylinder2D::assemble_system()
 							double duxdx = 0.0;
 							double duydy = 0.0;
 							for (unsigned int i=0; i<dofs_per_cellVy; ++i){
-								//duxdx += feVx_face_values.shape_grad(i,q_point)[0] * old_solutionVx(cell->vertex_dof_index(i,0));
-								//duydy += feVx_face_values.shape_grad(i,q_point)[1] * old_solutionVy(cell->vertex_dof_index(i,0));
 								duxdx += feVx_face_values.shape_grad(i,q_point)[0] * innerVx(cell->vertex_dof_index(i,0));
 								duydy += feVx_face_values.shape_grad(i,q_point)[1] * innerVy(cell->vertex_dof_index(i,0));
 							}
@@ -649,26 +445,44 @@ void cylinder2D::assemble_system()
 								local_rhsVx(i) += mu() * time_step * feVx_face_values.shape_value(i,q_point) * (4.0 / 3.0 * duxdx - 2.0 / 3.0 * duydy) *
 									feVx_face_values.normal_vector(q_point)[0] * feVx_face_values.JxW(q_point);
 						}
-					}
+					}		  
 		  
 				cell->get_dof_indices (local_dof_indicesVx);
-				constraintsVx.distribute_local_to_global(local_rhsVx, local_dof_indicesVx, system_rVx);
+				for (unsigned int i=0; i<dofs_per_cellVx; ++i){
+                    for (unsigned int j=0; j<dofs_per_cellVx; ++j)
+						system_mVx.add (local_dof_indicesVx[i], local_dof_indicesVx[j], local_matrixVx(i,j));
+                
+                    system_rVx(local_dof_indicesVx[i]) += local_rhsVx(i);
+				}
 			}//cell
+
+			std::map<types::global_dof_index,double> boundary_valuesVx1;
+			VectorTools::interpolate_boundary_values (dof_handlerVx, 1, ConstantFunction<2>(1.0), boundary_valuesVx1);
+			//VectorTools::interpolate_boundary_values (dof_handlerVx, 1, parabolicBC(), boundary_valuesVx1);
+			MatrixTools::apply_boundary_values (boundary_valuesVx1, system_mVx,    predictionVx,    system_rVx);
+
+			std::map<types::global_dof_index,double> boundary_valuesVx3;
+			VectorTools::interpolate_boundary_values (dof_handlerVx, 3, ConstantFunction<2>(0.0), boundary_valuesVx3);
+			MatrixTools::apply_boundary_values (boundary_valuesVx3, system_mVx,    predictionVx,    system_rVx);
+               
+			//std::map<types::global_dof_index,double> boundary_valuesVx4;
+			//VectorTools::interpolate_boundary_values (dof_handlerVx, 4, ConstantFunction<2>(0.0), boundary_valuesVx4);
+			//MatrixTools::apply_boundary_values (boundary_valuesVx4, system_mVx,    predictionVx,    system_rVx);
 		}//Vx
 
 		solveVx ();
 		
 		//Vy
-		system_rVy=0.0;
+		system_mVy = 0.0;
+		system_rVy = 0.0;
 		
 		{
 			DoFHandler<2>::active_cell_iterator cell = dof_handlerVy.begin_active();
 			DoFHandler<2>::active_cell_iterator endc = dof_handlerVy.end();
 			
 			for (; cell!=endc; ++cell) {
-				feVx_values.reinit (cell);
 				feVy_values.reinit (cell);
-				feP_values.reinit (cell);
+				local_matrixVy = 0.0;
 				local_rhsVy = 0.0;
 
 				for (unsigned int q_index=0; q_index<n_q_points; ++q_index) {
@@ -679,15 +493,14 @@ void cylinder2D::assemble_system()
 						for (unsigned int j=0; j<dofs_per_cellVy; ++j) {
 							const Tensor<0,2> Nj_vel = feVy_values.shape_value (j,q_index);
 							const Tensor<1,2> Nj_vel_grad = feVy_values.shape_grad (j,q_index);
-							//const Tensor<1,2> Nj_p_grad = feP_values.shape_grad (j,q_index);					
 													
-							//explicit account for tau_ij
-							//local_rhsVy(i) -= mu() * time_step * (Ni_vel_grad[0] * Nj_vel_grad[1] - 2.0/3.0 * Ni_vel_grad[1] * Nj_vel_grad[0]) * old_solutionVx(cell->vertex_dof_index(j,0)) * feVy_values.JxW (q_index);
-							//local_rhsVy(i) -= mu() * time_step * (Ni_vel_grad[0] * Nj_vel_grad[1] - 2.0/3.0 * Ni_vel_grad[1] * Nj_vel_grad[0]) * old_solutionVx(cell->vertex_dof_index(j,0)) * feVy_values.JxW (q_index);
-							local_rhsVy(i) -= mu() * time_step * (Ni_vel_grad[0] * Nj_vel_grad[1] - 2.0/3.0 * Ni_vel_grad[1] * Nj_vel_grad[0]) * innerVx(cell->vertex_dof_index(j,0)) * feVy_values.JxW (q_index);
+							local_matrixVy(i,j) += rho() * Ni_vel * Nj_vel * feVy_values.JxW(q_index);
+							//implicit account for tau_ij
+							local_matrixVy(i,j) += mu() * time_step * (Ni_vel_grad[0] * Nj_vel_grad[0] + 4.0/3.0 * Ni_vel_grad[1] * Nj_vel_grad[1]) * feVy_values.JxW (q_index);
 
-							local_rhsVy(i) += rho() * Nj_vel * Ni_vel * old_solutionVy(cell->vertex_dof_index(j,0)) *  feVy_values.JxW (q_index); 
-							//local_rhsVy(i) -= time_step * Ni_vel * Nj_p_grad[1] * old_solutionP(cell->vertex_dof_index(j,0)) * feVy_values.JxW (q_index);
+							local_rhsVy(i) += rho() * Nj_vel * Ni_vel * old_solutionVy(cell->vertex_dof_index(j,0)) * feVy_values.JxW (q_index); 
+							//explicit account for tau_ij
+							local_rhsVy(i) -= mu() * time_step * (Ni_vel_grad[0] * Nj_vel_grad[1] - 2.0/3.0 * Ni_vel_grad[1] * Nj_vel_grad[0]) * innerVx(cell->vertex_dof_index(j,0)) * feVy_values.JxW (q_index);
 						}//j
 					}//i
 				}//q_index
@@ -700,8 +513,6 @@ void cylinder2D::assemble_system()
 							double duxdy = 0.0;
 							double duydx = 0.0;
 							for (unsigned int i=0; i<dofs_per_cellVy; ++i){
-								//duxdy += feVy_face_values.shape_grad(i,q_point)[1] * old_solutionVx(cell->vertex_dof_index(i,0));
-								//duydx += feVy_face_values.shape_grad(i,q_point)[0] * old_solutionVy(cell->vertex_dof_index(i,0));
 								duxdy += feVy_face_values.shape_grad(i,q_point)[1] * innerVx(cell->vertex_dof_index(i,0));
 								duydx += feVy_face_values.shape_grad(i,q_point)[0] * innerVy(cell->vertex_dof_index(i,0));
 							}
@@ -713,68 +524,97 @@ void cylinder2D::assemble_system()
 					}
 		  
 				cell->get_dof_indices (local_dof_indicesVy);
-				constraintsVy.distribute_local_to_global(local_rhsVy, local_dof_indicesVy, system_rVy);
+				for (unsigned int i=0; i<dofs_per_cellVy; ++i){
+                    for (unsigned int j=0; j<dofs_per_cellVy; ++j)
+						system_mVy.add (local_dof_indicesVy[i], local_dof_indicesVy[j], local_matrixVy(i,j));
+                
+                    system_rVy(local_dof_indicesVy[i]) += local_rhsVy(i);
+				}
 			}//cell
+		
+			std::map<types::global_dof_index,double> boundary_valuesVy1;
+			VectorTools::interpolate_boundary_values (dof_handlerVy, 1, ConstantFunction<2>(0.0), boundary_valuesVy1);
+			MatrixTools::apply_boundary_values (boundary_valuesVy1, system_mVy,    predictionVy,    system_rVy);
+        
+			std::map<types::global_dof_index,double> boundary_valuesVy3;
+			VectorTools::interpolate_boundary_values (dof_handlerVy, 3, ConstantFunction<2>(0.0), boundary_valuesVy3);
+			MatrixTools::apply_boundary_values (boundary_valuesVy3, system_mVy,    predictionVy,    system_rVy);
+               
+			std::map<types::global_dof_index,double> boundary_valuesVy4;
+			VectorTools::interpolate_boundary_values (dof_handlerVy, 4, ConstantFunction<2>(0.0), boundary_valuesVy4);
+			MatrixTools::apply_boundary_values (boundary_valuesVy4, system_mVy,    predictionVy,    system_rVy);
 		}//Vy
 		
 		solveVy ();
 
-	//P	
-	{
-		system_rP=0.0;
-		
+		//P	
 		{
-			DoFHandler<2>::active_cell_iterator cell = dof_handlerP.begin_active();
-			DoFHandler<2>::active_cell_iterator endc = dof_handlerP.end();
+			system_mP = 0.0;
+			system_rP = 0.0;
 		
-			for (; cell!=endc; ++cell) {
-				feVx_values.reinit (cell);
-				feVy_values.reinit (cell);
-				feP_values.reinit (cell);
-				local_rhsP = 0.0;
+			{
+				DoFHandler<2>::active_cell_iterator cell = dof_handlerP.begin_active();
+				DoFHandler<2>::active_cell_iterator endc = dof_handlerP.end();
+		
+				for (; cell!=endc; ++cell) {
+					feVx_values.reinit (cell);
+					feVy_values.reinit (cell);
+					feP_values.reinit (cell);
+					local_matrixP = 0.0;
+					local_rhsP = 0.0;
 					
-				for (unsigned int q_index=0; q_index<n_q_points; ++q_index) {
-					for (unsigned int i=0; i<dofs_per_cellP; ++i) {
-						const Tensor<1,2> Nidx_pres = feP_values.shape_grad (i,q_index);
-						
-						for (unsigned int j=0; j<dofs_per_cellP; ++j) {
-							const Tensor<0,2> Nj_vel = feVx_values.shape_value (j,q_index);
-							//const Tensor<1,2> Njdx_pres = feP_values.shape_grad (j,q_index);
-											
-							local_rhsP(i) += rho() / time_step * (predictionVx(cell->vertex_dof_index(j,0)) * Nidx_pres[0] + 
-							                   predictionVy(cell->vertex_dof_index(j,0)) * Nidx_pres[1]) * Nj_vel * feP_values.JxW (q_index);
-							//local_rhsP(i) += Nidx_pres * Njdx_pres * old_solutionP(cell->vertex_dof_index(j,0)) * feP_values.JxW(q_index);
-						}//j
-					}//i
-				}//q_index
+					for (unsigned int q_index=0; q_index<n_q_points; ++q_index) {
+						for (unsigned int i=0; i<dofs_per_cellP; ++i) {
+							const Tensor<1,2> Nidx_pres = feP_values.shape_grad (i,q_index);
 
+							for (unsigned int j=0; j<dofs_per_cellP; ++j) {
+								const Tensor<0,2> Nj_vel = feVx_values.shape_value (j,q_index);
+								const Tensor<1,2> Njdx_pres = feP_values.shape_grad (j,q_index);
 
-				for (unsigned int face_number=0; face_number<GeometryInfo<2>::faces_per_cell; ++face_number)
-					if (cell->face(face_number)->at_boundary() && (cell->face(face_number)->boundary_id() == 1 || cell->face(face_number)->boundary_id() == 2)){//inlet + outlet
-						feVx_face_values.reinit (cell, face_number);
-						feP_face_values.reinit (cell, face_number);
+								local_matrixP(i,j) += Nidx_pres * Njdx_pres * feP_values.JxW(q_index);
+
+								local_rhsP(i) += rho() / time_step * (predictionVx(cell->vertex_dof_index(j,0)) * Nidx_pres[0] + 
+												predictionVy(cell->vertex_dof_index(j,0)) * Nidx_pres[1]) * Nj_vel * feP_values.JxW (q_index);
+							}//j
+						}//i
+					}//q_index
+
+					for (unsigned int face_number=0; face_number<GeometryInfo<2>::faces_per_cell; ++face_number)
+						if (cell->face(face_number)->at_boundary() && (cell->face(face_number)->boundary_id() == 1 || cell->face(face_number)->boundary_id() == 2)){//inlet + outlet
+							feVx_face_values.reinit (cell, face_number);
+							feP_face_values.reinit (cell, face_number);
 							
-						for (unsigned int q_point=0; q_point<n_face_q_points; ++q_point){
-							double Vx_q_point_value = 0.0;
-							for (unsigned int i=0; i<dofs_per_cellP; ++i)
-								Vx_q_point_value += feVx_face_values.shape_value(i,q_point) * predictionVx(cell->vertex_dof_index(i,0));								
+							for (unsigned int q_point=0; q_point<n_face_q_points; ++q_point){
+								double Vx_q_point_value = 0.0;
+								for (unsigned int i=0; i<dofs_per_cellP; ++i)
+									Vx_q_point_value += feVx_face_values.shape_value(i,q_point) * predictionVx(cell->vertex_dof_index(i,0));								
 							
-							for (unsigned int i=0; i<dofs_per_cellP; ++i){
-								local_rhsP(i) -= rho() / time_step * feP_face_values.shape_value(i,q_point) * Vx_q_point_value *
+								for (unsigned int i=0; i<dofs_per_cellP; ++i){
+									local_rhsP(i) -= rho() / time_step * feP_face_values.shape_value(i,q_point) * Vx_q_point_value *
 											feP_face_values.normal_vector(q_point)[0] * feP_face_values.JxW(q_point);			
+								}
 							}
 						}
-					}
 
-				cell->get_dof_indices (local_dof_indicesP);
-				constraintsP.distribute_local_to_global(local_rhsP, local_dof_indicesP, system_rP);
-			}//cell
-		}//P
+					cell->get_dof_indices (local_dof_indicesP);
+					for (unsigned int i=0; i<dofs_per_cellP; ++i){
+						for (unsigned int j=0; j<dofs_per_cellP; ++j)
+							system_mP.add (local_dof_indicesP[i], local_dof_indicesP[j], local_matrixP(i,j));
+                
+						system_rP(local_dof_indicesP[i]) += local_rhsP(i);
+					}
+				}//cell
+			
+				std::map<types::global_dof_index,double> boundary_valuesP2;
+				VectorTools::interpolate_boundary_values (dof_handlerP, 2, ConstantFunction<2>(0.0), boundary_valuesP2);
+				MatrixTools::apply_boundary_values (boundary_valuesP2, system_mP,    solutionP,    system_rP);
+			}//P
 		
-		solveP ();
+			solveP ();
 	
 			//Vx correction
 			{
+				system_mVx = 0.0;
 				system_rVx = 0.0;
 				
 				DoFHandler<2>::active_cell_iterator cell = dof_handlerVx.begin_active();
@@ -782,8 +622,8 @@ void cylinder2D::assemble_system()
 		
 				for (; cell!=endc; ++cell) {
 					feVx_values.reinit (cell);
-					feVy_values.reinit (cell);
 					feP_values.reinit (cell);
+					local_matrixVx = 0.0;
 					local_rhsVx = 0.0;
 		
 					for (unsigned int q_index=0; q_index<n_q_points; ++q_index) {
@@ -791,34 +631,53 @@ void cylinder2D::assemble_system()
 							const Tensor<0,2> Ni_vel = feVx_values.shape_value (i,q_index);
 					
 							for (unsigned int j=0; j<dofs_per_cellVx; ++j) {
+								const Tensor<0,2> Nj_vel = feVx_values.shape_value (j,q_index);
 								const Tensor<1,2> Nj_p_grad = feP_values.shape_grad (j,q_index);
 
+								local_matrixVx(i,j) += Ni_vel * Nj_vel * feVx_values.JxW(q_index);
+
 								//local_rhsVx(i) -= time_step/rho() * Ni_vel * Nj_p_grad[0] * (solutionP(cell->vertex_dof_index(j,0)) - old_solutionP(cell->vertex_dof_index(j,0))) * feVx_values.JxW (q_index);
-								local_rhsVx(i) -= time_step/rho() * Ni_vel * Nj_p_grad[0] * (solutionP(cell->vertex_dof_index(j,0)) ) * feVx_values.JxW (q_index);
+								local_rhsVx(i) -= time_step/rho() * Ni_vel * Nj_p_grad[0] * solutionP(cell->vertex_dof_index(j,0)) * feVx_values.JxW (q_index);
 							}//j
 						}//i
 					}//q_index
       
 					cell->get_dof_indices (local_dof_indicesVx);
-					constraintsCorrVx.distribute_local_to_global( local_rhsVx, local_dof_indicesVx, system_rVx);
-
+					for (unsigned int i=0; i<dofs_per_cellVx; ++i){
+						for (unsigned int j=0; j<dofs_per_cellVx; ++j)
+							system_mVx.add (local_dof_indicesVx[i], local_dof_indicesVx[j], local_matrixVx(i,j));
+                
+						system_rVx(local_dof_indicesVx[i]) += local_rhsVx(i);
+					}
 				}//cell
-			
+				
+				std::map<types::global_dof_index,double> boundary_valuesVx1;
+				VectorTools::interpolate_boundary_values (dof_handlerVx, 1, ConstantFunction<2>(0.0), boundary_valuesVx1);
+				MatrixTools::apply_boundary_values (boundary_valuesVx1, system_mVx,    correctionVx,    system_rVx);
+
+				std::map<types::global_dof_index,double> boundary_valuesVx3;
+				VectorTools::interpolate_boundary_values (dof_handlerVx, 3, ConstantFunction<2>(0.0), boundary_valuesVx3);
+				MatrixTools::apply_boundary_values (boundary_valuesVx3, system_mVx,    correctionVx,    system_rVx);
+
+				//std::map<types::global_dof_index,double> boundary_valuesVx4;
+				//VectorTools::interpolate_boundary_values (dof_handlerVx, 4, ConstantFunction<2>(0.0), boundary_valuesVx4);
+				//MatrixTools::apply_boundary_values (boundary_valuesVx4, system_mVx,    correctionVx,    system_rVx);
 			}//correction Vx
 		
 			solveVx (true);
 		
 			//Vy correction
 			{
+				system_mVy = 0.0;
 				system_rVy = 0.0;
 			
 				DoFHandler<2>::active_cell_iterator cell = dof_handlerVy.begin_active();
 				DoFHandler<2>::active_cell_iterator endc = dof_handlerVy.end();
 		
 				for (; cell!=endc; ++cell) {
-					feVx_values.reinit (cell);
 					feVy_values.reinit (cell);
 					feP_values.reinit (cell);
+					local_matrixVy = 0.0;
 					local_rhsVy = 0.0;
 		
 					for (unsigned int q_index=0; q_index<n_q_points; ++q_index) {
@@ -826,23 +685,40 @@ void cylinder2D::assemble_system()
 							const Tensor<0,2> Ni_vel = feVy_values.shape_value (i,q_index);
 					
 							for (unsigned int j=0; j<dofs_per_cellVy; ++j) {
+								const Tensor<0,2> Nj_vel = feVy_values.shape_value (j,q_index);
 								const Tensor<1,2> Nj_p_grad = feP_values.shape_grad (j,q_index);
 
+								local_matrixVy(i,j) += Ni_vel * Nj_vel * feVy_values.JxW(q_index);
+
 								//local_rhsVy(i) -= time_step/rho() * Ni_vel * Nj_p_grad[1] * (solutionP(cell->vertex_dof_index(j,0)) - old_solutionP(cell->vertex_dof_index(j,0))) * feVy_values.JxW (q_index);
-								local_rhsVy(i) -= time_step/rho() * Ni_vel * Nj_p_grad[1] * (solutionP(cell->vertex_dof_index(j,0)) ) * feVy_values.JxW (q_index);
+								local_rhsVy(i) -= time_step/rho() * Ni_vel * Nj_p_grad[1] * solutionP(cell->vertex_dof_index(j,0)) * feVy_values.JxW (q_index);
 							}//j
 						}//i
 					}//q_index
       
 					cell->get_dof_indices (local_dof_indicesVy);
-					constraintsCorrVy.distribute_local_to_global(local_rhsVy, local_dof_indicesVy, system_rVy);
+					for (unsigned int i=0; i<dofs_per_cellVy; ++i){
+						for (unsigned int j=0; j<dofs_per_cellVy; ++j)
+							system_mVy.add (local_dof_indicesVy[i], local_dof_indicesVy[j], local_matrixVy(i,j));
 
+						system_rVy(local_dof_indicesVy[i]) += local_rhsVy(i);
+					}
 				}//cell
-				
+							
+				std::map<types::global_dof_index,double> boundary_valuesVy1;							
+				VectorTools::interpolate_boundary_values (dof_handlerVy, 1, ConstantFunction<2>(0.0), boundary_valuesVy1);
+				MatrixTools::apply_boundary_values (boundary_valuesVy1, system_mVy,    correctionVy,    system_rVy);
+        
+				std::map<types::global_dof_index,double> boundary_valuesVy3;
+				VectorTools::interpolate_boundary_values (dof_handlerVy, 3, ConstantFunction<2>(0.0), boundary_valuesVy3);
+				MatrixTools::apply_boundary_values (boundary_valuesVy3, system_mVy,    correctionVy,    system_rVy);
+               
+				std::map<types::global_dof_index,double> boundary_valuesVy4;
+				VectorTools::interpolate_boundary_values (dof_handlerVy, 4, ConstantFunction<2>(0.0), boundary_valuesVy4);
+				MatrixTools::apply_boundary_values (boundary_valuesVy4, system_mVy,    correctionVy,    system_rVy);
 			}//Vy
 			
-			solveVy (true);
-		
+			solveVy (true);		
 		
 			solutionVx = predictionVx;
 			solutionVx += correctionVx;
@@ -854,7 +730,6 @@ void cylinder2D::assemble_system()
 	}//nOuterCorr
 }
 
-
 /*!
  * \brief Решение системы линейных алгебраических уравнений для МКЭ
  */
@@ -865,11 +740,8 @@ void cylinder2D::solveVx(bool correction)
 	PreconditionJacobi<> preconditioner;
 	
 	preconditioner.initialize(system_mVx, 1.0);
-	if(correction) solver.solve (system_mCorrVx, correctionVx, system_rVx, preconditioner);
+	if(correction) solver.solve (system_mVx, correctionVx, system_rVx, preconditioner);
 	else solver.solve (system_mVx, predictionVx, system_rVx, preconditioner);
-
-	if(correction) constraintsCorrVx.distribute(correctionVx);
-	else constraintsVx.distribute(predictionVx);
 
     if(solver_control.last_check() == SolverControl::success)
 		std::cout << "Solver for Vx converged with residual=" << solver_control.last_value() << ", no. of iterations=" << solver_control.last_step() << std::endl;
@@ -883,11 +755,8 @@ void cylinder2D::solveVy(bool correction)
 	PreconditionJacobi<> preconditioner;
 	
 	preconditioner.initialize(system_mVy, 1.0);
-	if(correction) solver.solve (system_mCorrVy, correctionVy, system_rVy, preconditioner);
+	if(correction) solver.solve (system_mVy, correctionVy, system_rVy, preconditioner);
 	else solver.solve (system_mVy, predictionVy, system_rVy, preconditioner);
-
-	if(correction) constraintsCorrVy.distribute(correctionVy);
-	else constraintsVy.distribute(predictionVy);
 
     if(solver_control.last_check() == SolverControl::success)
 		std::cout << "Solver for Vy converged with residual=" << solver_control.last_value() << ", no. of iterations=" << solver_control.last_step() << std::endl;
@@ -902,11 +771,8 @@ void cylinder2D::solveP()
 	PreconditionSSOR<> preconditioner;
 	
 	preconditioner.initialize(system_mP, 1.0);
-	solver.solve (system_mP, solutionP, system_rP,
-                  preconditioner);
+	solver.solve (system_mP, solutionP, system_rP, preconditioner);
               
-	constraintsP.distribute(solutionP);
-
     if(solver_control.last_check() == SolverControl::success)
 		std::cout << "Solver for P converged with residual=" << solver_control.last_value() << ", no. of iterations=" << solver_control.last_step() << std::endl;
 	else std::cout << "Solver for P failed to converge" << std::endl;
@@ -948,34 +814,26 @@ void cylinder2D::output_results(bool predictionCorrection)
 	output2 << std::endl;
 	output2 << "DATASET UNSTRUCTURED_GRID" << std::endl;
 	output2 << "POINTS " << particle_handler.n_global_particles() << " float" << std::endl;
-	for(auto particleIndex = particle_handler.begin(); 
-		                                   particleIndex != particle_handler.end(); ++particleIndex){
+	for(auto particleIndex = particle_handler.begin(); particleIndex != particle_handler.end(); ++particleIndex)
 		output2 << (*particleIndex).second->get_location() << " 0" << std::endl;
-	}
 	
 	output2 << std::endl;
 	
 	output2 << "CELLS " << particle_handler.n_global_particles() << " " << 2 * particle_handler.n_global_particles() << std::endl;
-	for (unsigned int i=0; i< particle_handler.n_global_particles(); ++i){
-		output2 << "1 " << i << std::endl; 
-	}
+	for (unsigned int i=0; i< particle_handler.n_global_particles(); ++i) output2 << "1 " << i << std::endl; 
 	
 	output2 << std::endl;
 	
 	output2 << "CELL_TYPES " << particle_handler.n_global_particles() << std::endl;
-	for (unsigned int i=0; i< particle_handler.n_global_particles(); ++i){
-		output2 << "1 "; 
-	}	
+	for (unsigned int i=0; i< particle_handler.n_global_particles(); ++i) output2 << "1 "; 
 	output2 << std::endl;
 	
 	output2 << std::endl;
 	
 	output2 << "POINT_DATA " << particle_handler.n_global_particles() << std::endl;
 	output2 << "VECTORS velocity float" << std::endl;
-	for(auto particleIndex = particle_handler.begin(); 
-		                                   particleIndex != particle_handler.end(); ++particleIndex){
+	for(auto particleIndex = particle_handler.begin(); particleIndex != particle_handler.end(); ++particleIndex)
 		output2 << (*particleIndex).second->get_velocity_component(0) << " " << (*particleIndex).second->get_velocity_component(1) << " 0" << std::endl;
-	}
 }
 
 /*!
@@ -1010,7 +868,7 @@ void cylinder2D::run()
 		
 		assemble_system();
 		if((timestep_number - 1) % num_of_data_ == 0) 
-			output_results();
+			output_results(false);
 		
 		calculate_loads(3, &os);
 		

@@ -1,7 +1,7 @@
 #ifndef PFEM2PARTICLE_H
 #define PFEM2PARTICLE_H
 
-#define PARTICLES_MOVEMENT_STEPS 1
+#define PARTICLES_MOVEMENT_STEPS 3
 #define MAX_PARTICLES_PER_CELL_PART 3
 
 #include <iostream>
@@ -172,6 +172,7 @@ public:
 	
 	pfem2ParticleHandler particle_handler;
 	FE_Q<2>  			 feVx, feVy, feP;
+	FESystem<2> 		 fe;
 	DoFHandler<2>        dof_handlerVx, dof_handlerVy, dof_handlerP;
 	TimerOutput			 *timer;
 	
