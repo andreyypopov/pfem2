@@ -1,0 +1,53 @@
+#
+
+subsection Liquid characteristics
+	set Dynamic viscosity = 0.003333333 
+	set Density           = 1.0 
+end
+
+#subsection Domain split
+#	set Number of partitiones in the x direction = 32
+#	set Number of partitiones in the y direction = 32
+#end
+
+subsection Time parameters
+	set Initial time        = 0.0
+	set Time step           = 0.02
+	set Number of time step = 1 #???????????????
+	set Final Time          = 500.0
+end
+
+subsection Solver parameters
+	set Accuracy             = 1e-7
+	set Number of iterations = 10000
+end
+
+subsection Boundary Values
+	#set Neuman value on the outlet boundary     = -10.0
+	set VelocityX value on the inlet boundary    = 0.0
+	set VelocityX value on the wall boundary     = 0.0
+	set VelocityX value on the cylinder boundary = 0.0
+	set VelocityY value on the inlet boundary    = 0.0
+	set VelocityY value on the wall boundary     = 0.0
+	set VelocityY value on the cylinder boundary = 0.0
+	set Pressure value on the outlet boundary    = 0.0
+end
+
+subsection Particles
+	set Number of particles in the x direction = 2
+	set Number of particles in the y direction = 2
+end
+
+subsection The criterion of record in the file
+	set Number of data to be recorded = 10
+end
+
+subsection The file with mesh
+	set Name of the file = scaled3.unv
+end
+
+subsection FSI parameters
+	set Lame parameter lambda = 115384615385
+	set Lame parameter mu     = 76923076923
+	set Spring constant       = 1.0	
+end

@@ -1,0 +1,1 @@
+./cylinderDyM | tee log.txt
