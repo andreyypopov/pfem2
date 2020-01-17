@@ -814,7 +814,6 @@ void pfem2Solver::reinterpolate_fields()
 		else {
 			//ячейки, которым принадлежит текущий узел (при смещении он попасть в одну из них)
 			const std::set<typename Triangulation<2>::active_cell_iterator> adjacentCells = vertex_to_cells.at(it->first);
-			
 			for(auto adjIt = adjacentCells.begin(); adjIt != adjacentCells.end(); ++adjIt){
 				if(*adjIt == cell) continue;	//одной из ячеек всегда будет та, которая уже проверена ранее
 				
@@ -822,14 +821,21 @@ void pfem2Solver::reinterpolate_fields()
 				
 				if(GeometryInfo<2>::is_inside_unit_cell(localCoords, 1e-5)){
 					cell = *adjIt;
+					cellFound = true;
 					break;
 				}
 			}
 		}
 		
 		if(!cellFound){
-			std::cout << "Could not find a new cell for a mesh node!" << std::endl;
-			exit(1);
+			std::cout << "Could not find a new cell for a mesh node with coordinates (" << it->second.coords << ") and dof index " << it->second.dofScalarIndex << std::endl;
+			
+			//значения полей остаются прежними
+			newSolutionVx[it->second.dofScalarIndex] = solutionVx[it->second.dofScalarIndex];
+			newSolutionVy[it->second.dofScalarIndex] = solutionVy[it->second.dofScalarIndex];
+			newSolutionP[it->second.dofScalarIndex] = solutionP[it->second.dofScalarIndex];
+			continue;
+			//exit(1);
 		}
 		
 		//интерполяция полей в новых координатах текущего узла по найденной ячейке
@@ -856,7 +862,7 @@ void pfem2Solver::transform_grid()
 	//вызов функции transform
 	GridTools::transform([this] (const Point<2> &p) {
 		for(std::map<int, meshNode>::iterator it = movingNodes.begin(); it != movingNodes.end(); ++it)
-			if((fabs(it->second.coords[0] - p[0]) < 1e-7) && (fabs(it->second.coords[1] - p[1]) < 1e-7)) return Point<2>(solutionU[it->second.dofUindexX], solutionU[it->second.dofUindexY]);
+			if((fabs(it->second.coords[0] - p[0]) < 1e-7) && (fabs(it->second.coords[1] - p[1]) < 1e-7)) return Point<2>(p[0] + solutionU[it->second.dofUindexX], p[1] + solutionU[it->second.dofUindexY]);
 			
 		return Point<2>();
 	}, tria);

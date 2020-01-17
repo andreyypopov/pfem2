@@ -49,5 +49,7 @@ end
 subsection FSI parameters
 	set Lame parameter lambda = 115384615385
 	set Lame parameter mu     = 76923076923
-	set Spring constant       = 1.0	
+	set Spring constant       = 1000.0	
+	set Body material density = 270.0
+	set Body surface area	  = 0.785398163
 end

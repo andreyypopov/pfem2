@@ -117,6 +117,7 @@ private:
 	double lambda_lame_, mu_lame_;
 	double old_body_velVy_, body_velVy_;
 	double spring_const_;
+	double body_rho_,body_area_;
 	
 	double old_displY_, displY_;
 };
@@ -128,14 +129,14 @@ cylinder2D::cylinder2D()
 	feVx_values (feVx, quadrature_formula, update_values | update_gradients | update_quadrature_points | update_JxW_values),
 	feVy_values (feVy, quadrature_formula, update_values | update_gradients | update_quadrature_points | update_JxW_values),
 	feP_values (feP, quadrature_formula, update_values | update_gradients | update_quadrature_points | update_JxW_values),
-	feU_values (feU, quadrature_formula, update_values | update_gradients | update_quadrature_points | update_JxW_values),
+	feU_values (fe2d, quadrature_formula, update_values | update_gradients | update_quadrature_points | update_JxW_values),
 	feVx_face_values (feVx, face_quadrature_formula, update_values | update_quadrature_points  | update_gradients | update_normal_vectors | update_JxW_values),
 	feVy_face_values (feVy, face_quadrature_formula, update_values | update_quadrature_points  | update_gradients | update_normal_vectors | update_JxW_values),
 	feP_face_values (feP, face_quadrature_formula, update_values | update_quadrature_points  | update_gradients | update_normal_vectors | update_JxW_values),
 	dofs_per_cellVx (feVx.dofs_per_cell),
 	dofs_per_cellVy (feVy.dofs_per_cell),
 	dofs_per_cellP (feP.dofs_per_cell),
-	dofs_per_cellU (feU.dofs_per_cell),
+	dofs_per_cellU (fe2d.dofs_per_cell),
 	n_q_points (quadrature_formula.size()),
 	n_face_q_points (face_quadrature_formula.size()),
 	local_matrixVx (dofs_per_cellVx, dofs_per_cellVx),
@@ -219,6 +220,8 @@ void cylinder2D::declare_parameters (ParameterHandler &prm)
 		prm.declare_entry ("Lame parameter lambda", "1.0");
 		prm.declare_entry ("Lame parameter mu", "1.0");
 		prm.declare_entry ("Spring constant", "1.0");
+		prm.declare_entry ("Body material density", "1.0");
+		prm.declare_entry ("Body surface area", "1.0");
 	}
 	prm.leave_subsection();
 }
@@ -287,6 +290,8 @@ void cylinder2D::get_parameters (ParameterHandler &prm)
 		lambda_lame_ = prm.get_double ("Lame parameter lambda");
 		mu_lame_ = prm.get_double ("Lame parameter mu");
 		spring_const_ = prm.get_double ("Spring constant");
+		body_rho_ = prm.get_double("Body material density");
+		body_area_ = prm.get_double("Body surface area");
 	}
 	prm.leave_subsection();
 }
@@ -369,6 +374,7 @@ void cylinder2D::setup_system()
     
 	DynamicSparsityPattern dspU(dof_handlerU.n_dofs(), dof_handlerU.n_dofs());
 	DoFTools::make_sparsity_pattern (dof_handlerU, dspU, hanging_node_constraints, true);
+	//DoFTools::make_sparsity_pattern (dof_handlerU, dspU);
 	sparsity_patternU.copy_from(dspU);
 	
 	system_mU.reinit (sparsity_patternU);
@@ -833,7 +839,7 @@ void cylinder2D::displacement()
 	old_body_velVy_ = body_velVy_;
 	old_displY_ = displY_;
 	
-	body_velVy_ += time_step * (force_Fy - spring_const_ * old_displY_);
+	body_velVy_ += time_step * (force_Fy - spring_const_ * old_displY_) / (body_rho_ * body_area_);
 	displY_ += time_step * body_velVy_;
 }
 
@@ -851,10 +857,10 @@ void cylinder2D::problem_of_elasticity()
 		local_matrixU = 0.0;
 				
 		for (unsigned int i=0; i<dofs_per_cellU; ++i) {	
-			const unsigned int component_i = feU.system_to_component_index(i).first;
+			const unsigned int component_i = fe2d.system_to_component_index(i).first;
 			
 			for (unsigned int j=0; j<dofs_per_cellU; ++j) {
-				const unsigned int component_j = feU.system_to_component_index(j).first;
+				const unsigned int component_j = fe2d.system_to_component_index(j).first;
 				
 				for (unsigned int q_point=0; q_point<n_q_points; ++q_point) {
 					local_matrixU(i, j) +=
@@ -879,20 +885,20 @@ void cylinder2D::problem_of_elasticity()
     hanging_node_constraints.condense(system_rU);
 	
 	std::map<types::global_dof_index,double> boundary_valuesUy1;							
-	VectorTools::interpolate_boundary_values (dof_handlerU, 1, ConstantFunction<2>(0.0), boundary_valuesUy1);
+	VectorTools::interpolate_boundary_values (dof_handlerU, 1, ZeroFunction<2>(2), boundary_valuesUy1);
 	MatrixTools::apply_boundary_values (boundary_valuesUy1, system_mU, solutionU, system_rU);
         
 	std::map<types::global_dof_index,double> boundary_valuesUy2;							
-	VectorTools::interpolate_boundary_values (dof_handlerU, 2, ConstantFunction<2>(0.0), boundary_valuesUy2);
+	VectorTools::interpolate_boundary_values (dof_handlerU, 2, ZeroFunction<2>(2), boundary_valuesUy2);
 	MatrixTools::apply_boundary_values (boundary_valuesUy2, system_mU, solutionU, system_rU);
 	
-	std::vector<double> values({0.0, displY_});	
+	std::vector<double> values({0.0, displY_});
 	std::map<types::global_dof_index,double> boundary_valuesUy3;							
 	VectorTools::interpolate_boundary_values (dof_handlerU, 3, ConstantFunction<2>(values), boundary_valuesUy3);
 	MatrixTools::apply_boundary_values (boundary_valuesUy3, system_mU, solutionU, system_rU);
                
 	std::map<types::global_dof_index,double> boundary_valuesUy4;							
-	VectorTools::interpolate_boundary_values (dof_handlerU, 4, ConstantFunction<2>(0.0), boundary_valuesUy4);
+	VectorTools::interpolate_boundary_values (dof_handlerU, 4, ZeroFunction<2>(2), boundary_valuesUy4);
 	MatrixTools::apply_boundary_values (boundary_valuesUy4, system_mU, solutionU, system_rU);
 	
 	solveU();
@@ -905,7 +911,7 @@ void cylinder2D::solveU()
 
 	PreconditionSSOR<> preconditioner;
 	
-	preconditioner.initialize(system_mU, 1.0);
+	preconditioner.initialize(system_mU, 1.2);
 	solver.solve (system_mU, solutionU, system_rU, preconditioner);
 	hanging_node_constraints.distribute(solutionU);
               
@@ -1013,14 +1019,16 @@ void cylinder2D::run()
 		distribute_particle_velocities_to_grid();
 		
 		assemble_system();
-		if((timestep_number - 1) % num_of_data_ == 0) 
-			output_results(false);
-		
 		calculate_loads(3, &os);
 		
 		displacement();
 		problem_of_elasticity();
+		
+		if((timestep_number - 1) % num_of_data_ == 0) 
+			output_results(false);	
+			
 		reinterpolate_fields();
+		transform_grid();
 		particle_handler.sort_particles_into_subdomains_and_cells();
 		
 		timer->print_summary();
