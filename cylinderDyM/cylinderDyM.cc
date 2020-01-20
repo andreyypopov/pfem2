@@ -106,6 +106,8 @@ public:
 	Vector<double> system_rVx, system_rVy, system_rP, system_rU;
 	
 private:
+	Tensor<1,2> bodyMotionRHS(const Tensor<1,2> u);
+
 	double mu_, rho_, final_time_, accuracy_;
 	int num_of_part_x_, num_of_part_y_;
 	double velX_inlet_, velX_wall_, velX_cyl_,
@@ -115,11 +117,11 @@ private:
 	std::string mesh_file_;  
 	
 	double lambda_lame_, mu_lame_;
-	double old_body_velVy_, body_velVy_;
-	double spring_const_;
+	double body_velVy_;
+	double spring_const_, damping_coeff_;
 	double body_rho_,body_area_;
 	
-	double old_displY_, displY_;
+	double displY_;
 };
 
 cylinder2D::cylinder2D()
@@ -153,6 +155,16 @@ cylinder2D::cylinder2D()
 	local_dof_indicesU (dofs_per_cellU)
 {
 
+}
+
+Tensor<1,2> cylinder2D::bodyMotionRHS(const Tensor<1,2> u)
+{
+	Tensor<1,2> res;
+	
+	res[0] = u[1];
+	res[1] = (force_Fy - damping_coeff_ * u[1] - spring_const_ * u[0]) / (body_rho_ * body_area_);
+	
+	return res;
 }
 
 void cylinder2D::declare_parameters (ParameterHandler &prm)
@@ -220,6 +232,7 @@ void cylinder2D::declare_parameters (ParameterHandler &prm)
 		prm.declare_entry ("Lame parameter lambda", "1.0");
 		prm.declare_entry ("Lame parameter mu", "1.0");
 		prm.declare_entry ("Spring constant", "1.0");
+		prm.declare_entry ("Damping coefficient", "1.0");
 		prm.declare_entry ("Body material density", "1.0");
 		prm.declare_entry ("Body surface area", "1.0");
 	}
@@ -290,6 +303,7 @@ void cylinder2D::get_parameters (ParameterHandler &prm)
 		lambda_lame_ = prm.get_double ("Lame parameter lambda");
 		mu_lame_ = prm.get_double ("Lame parameter mu");
 		spring_const_ = prm.get_double ("Spring constant");
+		damping_coeff_ = prm.get_double ("Damping coefficient");
 		body_rho_ = prm.get_double("Body material density");
 		body_area_ = prm.get_double("Body surface area");
 	}
@@ -836,11 +850,19 @@ void cylinder2D::solveP()
 
 void cylinder2D::displacement()
 {
-	old_body_velVy_ = body_velVy_;
-	old_displY_ = displY_;
+	TimerOutput::Scope timer_section(*timer, "Solving the body motion ODE");
 	
-	body_velVy_ += time_step * (force_Fy - spring_const_ * old_displY_) / (body_rho_ * body_area_);
-	displY_ += time_step * body_velVy_;
+	Tensor<1,2> un({displY_,body_velVy_});
+	
+	Tensor<1,2> k1 = bodyMotionRHS(un);
+	Tensor<1,2> k2 = bodyMotionRHS(un + k1 * time_step / 2.0);
+	Tensor<1,2> k3 = bodyMotionRHS(un + k2 * time_step / 2.0);
+	Tensor<1,2> k4 = bodyMotionRHS(un + k3 * time_step);
+	
+	Tensor<1,2> tmpK = (k1 + 2.0 * k2 + 2.0 * k3 + k4) * time_step / 6.0;
+	
+	displY_ += tmpK[0];
+	body_velVy_ += tmpK[1];	
 }
 
 void cylinder2D::problem_of_elasticity()
