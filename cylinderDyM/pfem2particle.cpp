@@ -512,7 +512,13 @@ void pfem2Solver::seed_particles_into_cell (const typename DoFHandler<2>::cell_i
 	}
 }
 
-  bool pfem2Solver::check_cell_for_empty_parts (const typename DoFHandler<2>::cell_iterator &cell)
+void pfem2Solver::check_empty_cells()
+{
+	for (auto cell = dof_handlerVx.begin(tria.n_levels()-1); cell != dof_handlerVx.end(tria.n_levels()-1); ++cell)
+		check_cell_for_empty_parts(cell);
+}
+
+bool pfem2Solver::check_cell_for_empty_parts (const typename DoFHandler<2>::cell_iterator &cell)
 {
 	bool res = false;
 	
@@ -638,10 +644,7 @@ void pfem2Solver::move_particles() //перенос частиц
 		particle_handler.sort_particles_into_subdomains_and_cells();
 	}//np_m
 	
-	//проверка наличия пустых ячеек (без частиц) и размещение в них частиц
-	typename DoFHandler<2>::cell_iterator cell = dof_handlerVx.begin(tria.n_levels()-1), endc = dof_handlerVx.end(tria.n_levels()-1);
-	
-	for (; cell != endc; ++cell) check_cell_for_empty_parts(cell);
+	check_empty_cells();
 	
 	//std::cout << "Finished moving particles" << std::endl;
 }
@@ -731,7 +734,7 @@ void pfem2Solver::calculate_loads(types::boundary_id patch_id, std::ofstream *ou
 		p_point /= probeDoFnumbers.size();
 	}
 			
-	*out << time << ";" << Fx << ";" << Fy << ";" << p_point /*<< ";" << Cx << ";" << Cy << ";"*/ << std::endl;
+	*out << time << ";" << Fx << ";" << Fy << ";" << p_point /*<< ";" << Cx << ";" << Cy << ";"*/;
 	
 	force_Fy = -Fy;
 	
@@ -828,7 +831,7 @@ void pfem2Solver::reinterpolate_fields()
 		}
 		
 		if(!cellFound){
-			std::cout << "Could not find a new cell for a mesh node with coordinates (" << it->second.coords << ") and dof index " << it->second.dofScalarIndex << std::endl;
+			//std::cout << "Could not find a new cell for a mesh node with coordinates (" << it->second.coords << ") and dof index " << it->second.dofScalarIndex << std::endl;
 			
 			//значения полей остаются прежними
 			newSolutionVx[it->second.dofScalarIndex] = solutionVx[it->second.dofScalarIndex];

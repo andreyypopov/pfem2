@@ -74,8 +74,23 @@ public:
 	void solveP();
 	void solveU();
 	
-	void displacement();
-	void problem_of_elasticity();
+	/*!
+	 * \brief Решение уравнения движения для тела
+	 * \param out Поток для вывода в файл координаты Y
+	 * \return Перемещение точек тела в направлении оси Y (используется в дальнейшем как ГУ для задачи теории упругости для узлов сетки)
+	 * 
+	 * ОДУ 2-го порядка решается методом Рунге-Кутты 4го порядка точности
+	 */
+	double displacement(std::ofstream *out = nullptr);
+	
+	/*!
+	 * \brief Решение задачи теории упругости для деформирования ячеек сетки
+	 * \param boundaryDisplacement Величина перемещения (относительного!) для точек на поверхности тела
+	 * 
+	 * Составляется матрица системы (правая часть изначально нулевая), накладываются ГУ (все нулевые, кроме перемещения в направдении Oy на поверхности тела).
+	 * Задача решается совместно для ux и uy (используются векторные функции формы - из 2х компонент).
+	 */
+	void problem_of_elasticity(double boundaryDisplacement);
 	
 	void output_results(bool predictionCorrection = false);
 	void run();
@@ -117,11 +132,9 @@ private:
 	std::string mesh_file_;  
 	
 	double lambda_lame_, mu_lame_;
-	double body_velVy_;
+	double body_y_, body_velVy_;
 	double spring_const_, damping_coeff_;
 	double body_rho_,body_area_;
-	
-	double displY_;
 };
 
 cylinder2D::cylinder2D()
@@ -848,11 +861,11 @@ void cylinder2D::solveP()
 	else std::cout << "Solver for P failed to converge" << std::endl;
 }
 
-void cylinder2D::displacement()
+double cylinder2D::displacement(std::ofstream *out)
 {
 	TimerOutput::Scope timer_section(*timer, "Solving the body motion ODE");
 	
-	Tensor<1,2> un({displY_,body_velVy_});
+	Tensor<1,2> un({body_y_,body_velVy_});
 	
 	Tensor<1,2> k1 = bodyMotionRHS(un);
 	Tensor<1,2> k2 = bodyMotionRHS(un + k1 * time_step / 2.0);
@@ -861,11 +874,15 @@ void cylinder2D::displacement()
 	
 	Tensor<1,2> tmpK = (k1 + 2.0 * k2 + 2.0 * k3 + k4) * time_step / 6.0;
 	
-	displY_ += tmpK[0];
-	body_velVy_ += tmpK[1];	
+	body_y_ += tmpK[0];
+	body_velVy_ += tmpK[1];
+	
+	if(out) *out << ";" << body_y_ << std::endl;
+	
+	return tmpK[0];
 }
 
-void cylinder2D::problem_of_elasticity()
+void cylinder2D::problem_of_elasticity(double boundaryDisplacement)
 {
     TimerOutput::Scope timer_section(*timer, "Elasticity problem");
     
@@ -914,7 +931,7 @@ void cylinder2D::problem_of_elasticity()
 	VectorTools::interpolate_boundary_values (dof_handlerU, 2, ZeroFunction<2>(2), boundary_valuesUy2);
 	MatrixTools::apply_boundary_values (boundary_valuesUy2, system_mU, solutionU, system_rU);
 	
-	std::vector<double> values({0.0, displY_});
+	std::vector<double> values({0.0, boundaryDisplacement});
 	std::map<types::global_dof_index,double> boundary_valuesUy3;							
 	VectorTools::interpolate_boundary_values (dof_handlerU, 3, ConstantFunction<2>(values), boundary_valuesUy3);
 	MatrixTools::apply_boundary_values (boundary_valuesUy3, system_mU, solutionU, system_rU);
@@ -1025,13 +1042,14 @@ void cylinder2D::run()
 	solutionU=0.0;
 	
 	body_velVy_ = 0.0;
-	displY_ = 0.0;
+	body_y_ = 0.0;
 	
 	//удаление старых файлов VTK (специфическая команда Linux!!!)
 	system("rm solution-*.vtk");
 	system("rm particles-*.vtk");
 
 	std::ofstream os("force.csv");
+	os << "t;Fx;Fy;P;Y" << std::endl;
 
 	for (; time <= final_time_; time += time_step, ++timestep_number) {
 		std::cout << std::endl << "Time step " << timestep_number << " at t=" << time << std::endl;
@@ -1043,8 +1061,8 @@ void cylinder2D::run()
 		assemble_system();
 		calculate_loads(3, &os);
 		
-		displacement();
-		problem_of_elasticity();
+		double displ = displacement(&os);
+		problem_of_elasticity(displ);
 		
 		if((timestep_number - 1) % num_of_data_ == 0) 
 			output_results(false);	
@@ -1052,6 +1070,7 @@ void cylinder2D::run()
 		reinterpolate_fields();
 		transform_grid();
 		particle_handler.sort_particles_into_subdomains_and_cells();
+		check_empty_cells();
 		
 		timer->print_summary();
 	}//time

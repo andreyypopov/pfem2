@@ -138,8 +138,6 @@ public:
 	virtual void solveVx(bool correction = false) = 0;
 	virtual void solveVy(bool correction = false) = 0;
 	virtual void solveP() = 0;
-	virtual void displacement() = 0;
-	virtual void problem_of_elasticity() = 0;
 	virtual void solveU() = 0;
 	virtual void output_results(bool predictionCorrection = false) = 0;
 	
@@ -175,7 +173,7 @@ public:
 	 * + координаты частицы изменяются согласно формулам метода Эйлера.
 	 */
 	void move_particles();
-	
+		
 	void calculate_loads(types::boundary_id patch_id, std::ofstream *out);
 	
 	double time,time_step;							//!< Шаг решения задачи методом конечных элементов
@@ -202,6 +200,8 @@ public:
 protected:
 	void seed_particles_into_cell (const typename DoFHandler<2>::cell_iterator &cell);
 	bool check_cell_for_empty_parts (const typename DoFHandler<2>::cell_iterator &cell);
+	
+	void check_empty_cells();	//!< Проверка наличия пустых ячеек (без частиц) и размещение в них частиц
 	
 	//работа с подвижной сеткой
 	/*!

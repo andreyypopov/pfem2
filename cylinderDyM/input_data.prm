@@ -39,7 +39,7 @@ subsection Particles
 end
 
 subsection The criterion of record in the file
-	set Number of data to be recorded = 10
+	set Number of data to be recorded = 100
 end
 
 subsection The file with mesh
