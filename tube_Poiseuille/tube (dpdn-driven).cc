@@ -118,70 +118,51 @@ void tube::setup_system()
 {
 	TimerOutput::Scope timer_section(*timer, "System setup");
 
-	//имеющаяся процедура в почти неизменном виде
-	dof_handlerVx.distribute_dofs (feVx);
-	std::cout << "Number of degrees of freedom Vx: "
-			  << dof_handlerVx.n_dofs()
-			  << std::endl;
-			  
-	dof_handlerVy.distribute_dofs (feVy);
-	std::cout << "Number of degrees of freedom Vy: "
-			  << dof_handlerVy.n_dofs()
-			  << std::endl;
-			  
-	dof_handlerP.distribute_dofs (feP);
-	std::cout << "Number of degrees of freedom P: "
-			  << dof_handlerP.n_dofs()
-			  << std::endl;
+    dof_handlerVx.distribute_dofs (feVx);
+    std::cout << "Number of degrees of freedom Vx: " << dof_handlerVx.n_dofs() << std::endl;
+    
+    dof_handlerVy.distribute_dofs (feVy);
+    std::cout << "Number of degrees of freedom Vy: " << dof_handlerVy.n_dofs() << std::endl;
+    
+    dof_handlerP.distribute_dofs (feP);
+    std::cout << "Number of degrees of freedom P: " << dof_handlerP.n_dofs() << std::endl;
 
-	//Vx	  
-	DynamicSparsityPattern dspVx(dof_handlerVx.n_dofs());
-	DoFTools::make_sparsity_pattern (dof_handlerVx, dspVx);
-	sparsity_patternVx.copy_from(dspVx);
-	
-	system_mVx.reinit (sparsity_patternVx);
-	
-	solutionVx.reinit (dof_handlerVx.n_dofs());
-	predictionVx.reinit (dof_handlerVx.n_dofs());
-	correctionVx.reinit (dof_handlerVx.n_dofs());
-	old_solutionVx.reinit (dof_handlerVx.n_dofs());
+    //Vx
+    DynamicSparsityPattern dspVx(dof_handlerVx.n_dofs());
+    DoFTools::make_sparsity_pattern (dof_handlerVx, dspVx);
+    sparsity_patternVx.copy_from(dspVx);
+    
+    system_mVx.reinit (sparsity_patternVx);
+   
+    solutionVx.reinit (dof_handlerVx.n_dofs());
+    predictionVx.reinit (dof_handlerVx.n_dofs());
+    correctionVx.reinit (dof_handlerVx.n_dofs());
+    old_solutionVx.reinit (dof_handlerVx.n_dofs());
     system_rVx.reinit (dof_handlerVx.n_dofs());
     
     //Vy
     DynamicSparsityPattern dspVy(dof_handlerVy.n_dofs());
-	DoFTools::make_sparsity_pattern (dof_handlerVy, dspVy);
-	sparsity_patternVy.copy_from(dspVy);
-	
-	system_mVy.reinit (sparsity_patternVy);
-	
-	solutionVy.reinit (dof_handlerVy.n_dofs());
-	predictionVy.reinit (dof_handlerVy.n_dofs());
-	correctionVy.reinit (dof_handlerVy.n_dofs());
-	old_solutionVy.reinit (dof_handlerVy.n_dofs());
+    DoFTools::make_sparsity_pattern (dof_handlerVy, dspVy);
+    sparsity_patternVy.copy_from(dspVy);
+    
+    system_mVy.reinit (sparsity_patternVy);
+    
+    solutionVy.reinit (dof_handlerVy.n_dofs());
+    predictionVy.reinit (dof_handlerVy.n_dofs());
+    correctionVy.reinit (dof_handlerVy.n_dofs());
+    old_solutionVy.reinit (dof_handlerVy.n_dofs());
     system_rVy.reinit (dof_handlerVy.n_dofs());
-	
-	//P
+    
+    //P
     DynamicSparsityPattern dspP(dof_handlerP.n_dofs());
-	DoFTools::make_sparsity_pattern (dof_handlerP, dspP);
-	sparsity_patternP.copy_from(dspP);
-	
-	system_mP.reinit (sparsity_patternP);
-	
-	solutionP.reinit (dof_handlerP.n_dofs());
-	old_solutionP.reinit (dof_handlerP.n_dofs());
+    DoFTools::make_sparsity_pattern (dof_handlerP, dspP);
+    sparsity_patternP.copy_from(dspP);
+    
+    system_mP.reinit (sparsity_patternP);
+    
+    solutionP.reinit (dof_handlerP.n_dofs());
+    old_solutionP.reinit (dof_handlerP.n_dofs());
     system_rP.reinit (dof_handlerP.n_dofs());
-    
-    return;
-    
-    DoFHandler<2>::active_cell_iterator cell = dof_handlerVx.begin_active(), endc = dof_handlerVx.end();
-	std::ofstream vertices("vertices.txt");
-	for (; cell!=endc; ++cell) {
-		for (unsigned int i=0; i < 4; ++i){
-			vertices << "DoF no. " << cell->vertex_dof_index(i,0) << " is located at " << cell->vertex(i) << std::endl;
-		}
-	}
-	
-	vertices.close();
 }
 
 void tube::assemble_system()
@@ -193,46 +174,33 @@ void tube::assemble_system()
 	old_solutionP = solutionP;
 	
 	QGauss<2>   quadrature_formula(2);
-	QGauss<1>   face_quadrature_formula(2);
+    QGauss<1>   face_quadrature_formula(2);
 	
-	FEValues<2> feVx_values (feVx, quadrature_formula,
-                           update_values | update_gradients | update_quadrature_points |
-						   update_JxW_values);
-	FEValues<2> feVy_values (feVy, quadrature_formula,
-                           update_values | update_gradients | update_quadrature_points |
-						   update_JxW_values);
-	FEValues<2> feP_values (feP, quadrature_formula,
-                           update_values | update_gradients | update_quadrature_points |
-						   update_JxW_values); 
-						   
-	FEFaceValues<2> feVx_face_values (feVx, face_quadrature_formula,
-                                      update_values         | update_quadrature_points  |
-                                      update_normal_vectors | update_JxW_values);
-	FEFaceValues<2> feVy_face_values (feVy, face_quadrature_formula,
-                                      update_values         | update_quadrature_points  |
-                                      update_normal_vectors | update_JxW_values);
-	FEFaceValues<2> feP_face_values (feP, face_quadrature_formula,
-                                      update_values         | update_quadrature_points  |
-                                      update_normal_vectors | update_JxW_values);
-						                                       
+    FEValues<2> feVx_values (feVx, quadrature_formula, update_values | update_gradients | update_quadrature_points | update_JxW_values);
+    FEValues<2> feVy_values (feVy, quadrature_formula, update_values | update_gradients | update_quadrature_points | update_JxW_values);
+    FEValues<2> feP_values (feP, quadrature_formula, update_values | update_gradients | update_quadrature_points | update_JxW_values);
+    
+    FEFaceValues<2> feVy_face_values (feVy, face_quadrature_formula, update_values | update_gradients | update_quadrature_points | update_normal_vectors | update_JxW_values);
+    FEFaceValues<2> feP_face_values (feP, face_quadrature_formula, update_values | update_gradients | update_quadrature_points | update_normal_vectors | update_JxW_values);
+    FEFaceValues<2> feVx_face_values (feVx, face_quadrature_formula, update_values | update_gradients | update_quadrature_points | update_normal_vectors | update_JxW_values);
     const unsigned int   dofs_per_cellVx = feVx.dofs_per_cell,
-						 dofs_per_cellVy = feVy.dofs_per_cell,
-						 dofs_per_cellP = feP.dofs_per_cell;
-						 
-	const unsigned int   n_q_points = quadrature_formula.size();
-	const unsigned int n_face_q_points = face_quadrature_formula.size();
-	
-	FullMatrix<double>   local_matrixVx (dofs_per_cellVx, dofs_per_cellVx),
-						 local_matrixVy (dofs_per_cellVy, dofs_per_cellVy),
-						 local_matrixP (dofs_per_cellP, dofs_per_cellP);
-						 
-	Vector<double>       local_rhsVx (dofs_per_cellVx),
-						 local_rhsVy (dofs_per_cellVy),
-						 local_rhsP (dofs_per_cellP);
-	
-	std::vector<types::global_dof_index> local_dof_indicesVx (dofs_per_cellVx),
-	                                     local_dof_indicesVy (dofs_per_cellVy),
-										 local_dof_indicesP (dofs_per_cellP);
+    dofs_per_cellVy = feVy.dofs_per_cell,
+    dofs_per_cellP = feP.dofs_per_cell;
+    
+    const unsigned int   n_q_points = quadrature_formula.size();
+    const unsigned int n_face_q_points = face_quadrature_formula.size();
+    
+    FullMatrix<double>   local_matrixVx (dofs_per_cellVx, dofs_per_cellVx),
+    local_matrixVy (dofs_per_cellVy, dofs_per_cellVy),
+    local_matrixP (dofs_per_cellP, dofs_per_cellP);
+    
+    Vector<double>       local_rhsVx (dofs_per_cellVx),
+    local_rhsVy (dofs_per_cellVy),
+    local_rhsP (dofs_per_cellP);
+    
+    std::vector<types::global_dof_index> local_dof_indicesVx (dofs_per_cellVx),
+    local_dof_indicesVy (dofs_per_cellVy),
+    local_dof_indicesP (dofs_per_cellP);
 										 
 	const double mu = 1.0,
 		         rho = 1.0;
@@ -248,9 +216,7 @@ void tube::assemble_system()
 		DoFHandler<2>::active_cell_iterator cell = dof_handlerVx.begin_active();
 		DoFHandler<2>::active_cell_iterator endc = dof_handlerVx.end();
 		
-		int number = 0;
-		
-		for (; cell!=endc; ++cell,++number) {
+		for (; cell!=endc; ++cell) {
 			feVx_values.reinit (cell);
 			feVy_values.reinit (cell);
 			feP_values.reinit (cell);
@@ -281,56 +247,32 @@ void tube::assemble_system()
 			
 			for (unsigned int face_number=0; face_number<GeometryInfo<2>::faces_per_cell; ++face_number)
 				if (cell->face(face_number)->at_boundary() && (cell->face(face_number)->boundary_id() == 0 || cell->face(face_number)->boundary_id() == 1)){
-					feVx_face_values.reinit (cell, face_number);
-					
-					for (unsigned int q_point=0; q_point<n_face_q_points; ++q_point){
+					feVy_face_values.reinit (cell, face_number);
+                    feVx_face_values.reinit (cell, face_number);
+                        
+                    for (unsigned int q_point=0; q_point<n_face_q_points; ++q_point){
 						double duydy = 0.0;
-						for (unsigned int i=0; i<dofs_per_cellVy; ++i)
-							duydy += feVy_values.shape_grad(i,q_point)[1] * old_solutionVy(cell->vertex_dof_index(i,0));
-					
-						for (unsigned int i=0; i<dofs_per_cellVy; ++i)
-							local_rhsVx(i) += mu * time_step * feVx_face_values.shape_value(i,q_point) * (-2.0/3.0) * duydy *
-								feVx_face_values.normal_vector(q_point)[0] * feVx_face_values.JxW(q_point);
-					}
+                            
+                        for (unsigned int i=0; i<dofs_per_cellVx; ++i)
+                            duydy += feVy_face_values.shape_grad(i,q_point)[1] * old_solutionVy(cell->vertex_dof_index(i,0));
+                            
+                        for (unsigned int i=0; i<dofs_per_cellVx; ++i){
+							local_rhsVx(i) += mu * time_step * feVy_face_values.shape_value(i,q_point) * (-2.0 * duydy / 3.0)*
+                            feVy_face_values.normal_vector(q_point)[0]* feVy_face_values.JxW(q_point);
+                        }
+                    }
 				}
-      
-			/*if(timestep_number == 1){
-				const std::string filenameVx =  "matrixVx-" + Utilities::int_to_string (number) +	".txt";
-				std::ofstream matrixFile (filenameVx.c_str());
-			
-				for (unsigned int i=0; i<dofs_per_cellVx; ++i) {
-					matrixFile << cell->vertex_dof_index(i,0) << " ";
-				}
-				matrixFile << std::endl;
-			
-				local_matrixVx.print(matrixFile, 16, 10);
-			
-				matrixFile.close();
-			}*/
       
 			cell->get_dof_indices (local_dof_indicesVx);
 
 			for (unsigned int i=0; i<dofs_per_cellVx; ++i)
-				for (unsigned int j=0; j<dofs_per_cellVx; ++j){
+				for (unsigned int j=0; j<dofs_per_cellVx; ++j)
 					system_mVx.add (local_dof_indicesVx[i], local_dof_indicesVx[j], local_matrixVx(i,j));
-				}
 											
 			for (unsigned int i=0; i<dofs_per_cellVx; ++i)
 				system_rVx(local_dof_indicesVx[i]) += local_rhsVx(i);
 		}//cell
     }//Vx
-	    
-	/*if(timestep_number==1)
-	{
-		std::ofstream matrStream("PrematrixVx.txt");
-		std::ofstream rhsStream("PrerhsVx.txt");
-	
-		system_mVx.print_formatted(matrStream, 8, true, 0, "0.0");
-		system_rVx.print(rhsStream, 8, true);
-	
-		matrStream.close();
-		rhsStream.close();
-	}*/
 	    
 	std::map<types::global_dof_index,double> boundary_valuesVx3;
 	VectorTools::interpolate_boundary_values (dof_handlerVx, 2, ConstantFunction<2>(0.0), boundary_valuesVx3);
@@ -341,21 +283,6 @@ void tube::assemble_system()
 	MatrixTools::apply_boundary_values (boundary_valuesVx4, system_mVx,	predictionVx, system_rVx);
 						
 	solveVx ();
-	
-	/*if(timestep_number==1)
-	{
-		std::ofstream matrStream("matrixVx.txt");
-		std::ofstream rhsStream("rhsVx.txt");
-		std::ofstream solStream("solVx.txt");
-	
-		system_mVx.print_formatted(matrStream, 8, true, 0, "0.0");
-		system_rVx.print(rhsStream, 8, true);
-		solutionVx.print(solStream, 8, true);
-	
-		matrStream.close();
-		rhsStream.close();
-		solStream.close();
-	}*/
 	
 	//Vy
 	{
@@ -393,17 +320,20 @@ void tube::assemble_system()
 			
 			for (unsigned int face_number=0; face_number<GeometryInfo<2>::faces_per_cell; ++face_number)
 				if (cell->face(face_number)->at_boundary() && (cell->face(face_number)->boundary_id() == 0 || cell->face(face_number)->boundary_id() == 1)){
-					feVy_face_values.reinit (cell, face_number);
-					
-					for (unsigned int q_point=0; q_point<n_face_q_points; ++q_point){
+                    feVy_face_values.reinit (cell, face_number);
+                    feVx_face_values.reinit (cell, face_number);
+                        
+                    for (unsigned int q_point=0; q_point<n_face_q_points; ++q_point){
 						double duxdy = 0.0;
-						for (unsigned int i=0; i<dofs_per_cellVy; ++i)
-							duxdy += feVx_values.shape_grad(i,q_point)[1] * old_solutionVx(cell->vertex_dof_index(i,0));
-					
-						for (unsigned int i=0; i<dofs_per_cellVy; ++i)
-							local_rhsVy(i) += mu * time_step * feVy_face_values.shape_value(i,q_point) * duxdy *
-								feVy_face_values.normal_vector(q_point)[0] * feVy_face_values.JxW(q_point);
-					}
+                            
+                        for (unsigned int i=0; i<dofs_per_cellVy; ++i)
+                            duxdy += feVx_face_values.shape_grad(i,q_point)[1] * old_solutionVx(cell->vertex_dof_index(i,0));
+                            
+                        for (unsigned int i=0; i<dofs_per_cellVy; ++i){
+                            local_rhsVy(i) += mu * time_step * feVy_face_values.shape_value(i,q_point) * duxdy *
+							feVy_face_values.normal_vector(q_point)[0] * feVy_face_values.JxW(q_point);
+                        }
+                    }
 				}
       
 			cell->get_dof_indices (local_dof_indicesVy);
@@ -463,11 +393,12 @@ void tube::assemble_system()
 				for (unsigned int face_number=0; face_number<GeometryInfo<2>::faces_per_cell; ++face_number)
 					if (cell->face(face_number)->at_boundary() && (cell->face(face_number)->boundary_id() == 0 || cell->face(face_number)->boundary_id() == 1)){
 						feP_face_values.reinit (cell, face_number);
+                        feVx_face_values.reinit (cell, face_number);
 					
 						for (unsigned int q_point=0; q_point<n_face_q_points; ++q_point){
 							double Vx_q_point_value = 0.0;
 							for (unsigned int i=0; i<dofs_per_cellP; ++i)
-								Vx_q_point_value += feVx_values.shape_value(i,q_point) * predictionVx(cell->vertex_dof_index(i,0));
+								Vx_q_point_value += feVx_face_values.shape_value(i,q_point) * predictionVx(cell->vertex_dof_index(i,0));
 						
 							for (unsigned int i=0; i<dofs_per_cellP; ++i){
 								local_rhsP(i) -= rho / time_step * feP_face_values.shape_value(i,q_point) * Vx_q_point_value *
@@ -660,72 +591,66 @@ void tube::solveP()
  */
 void tube::output_results(bool predictionCorrection) 
 {
-	TimerOutput::Scope timer_section(*timer, "Results output");
-	
-	/*const std::string filenameVx =  "resultsVx-" + Utilities::int_to_string (timestep_number, 2) +	".txt";
-	std::ofstream rawResults (filenameVx.c_str());
-	for (unsigned int i=0; i<dof_handlerVx.n_dofs(); ++i){
-		rawResults << "DoF no. " << i << ", Vx=" << solutionVx(i) << std::endl;
-	}
-	rawResults.close();*/
-	
-	DataOut<2> data_out;
-
-	data_out.attach_dof_handler (dof_handlerVx);
-	data_out.add_data_vector (solutionVx, "Vx");
-	data_out.add_data_vector (solutionVy, "Vy");
-	data_out.add_data_vector (solutionP, "P");
-	
-	if(predictionCorrection){
-		data_out.add_data_vector (predictionVx, "predVx");
-		data_out.add_data_vector (predictionVy, "predVy");
-		data_out.add_data_vector (correctionVx, "corVx");
-		data_out.add_data_vector (correctionVy, "corVy");
-	}
-	
-	data_out.build_patches ();
-
-	const std::string filename =  "solution-" + Utilities::int_to_string (timestep_number, 2) +	".vtk";
-	std::ofstream output (filename.c_str());
-	data_out.write_vtk (output);
-	
-	//вывод частиц
-	const std::string filename2 =  "particles-" + Utilities::int_to_string (timestep_number, 2) + ".vtk";
-	std::ofstream output2 (filename2.c_str());
-	output2 << "# vtk DataFile Version 3.0" << std::endl;
-	output2 << "Unstructured Grid Example" << std::endl;
-	output2 << "ASCII" << std::endl;
-	output2 << std::endl;
-	output2 << "DATASET UNSTRUCTURED_GRID" << std::endl;
-	output2 << "POINTS " << particle_handler.n_global_particles() << " float" << std::endl;
-	for(ParticleIterator<2> particleIndex = particle_handler.begin(); 
-		                                   particleIndex != particle_handler.end(); ++particleIndex){
-		output2 << particleIndex->get_location() << " 0" << std::endl;
-	}
-	
-	output2 << std::endl;
-	
-	output2 << "CELLS " << particle_handler.n_global_particles() << " " << 2 * particle_handler.n_global_particles() << std::endl;
-	for (unsigned int i=0; i< particle_handler.n_global_particles(); ++i){
-		output2 << "1 " << i << std::endl; 
-	}
-	
-	output2 << std::endl;
-	
-	output2 << "CELL_TYPES " << particle_handler.n_global_particles() << std::endl;
-	for (unsigned int i=0; i< particle_handler.n_global_particles(); ++i){
-		output2 << "1 "; 
-	}	
-	output2 << std::endl;
-	
-	output2 << std::endl;
-	
-	output2 << "POINT_DATA " << particle_handler.n_global_particles() << std::endl;
-	output2 << "VECTORS velocity float" << std::endl;
-	for(ParticleIterator<2> particleIndex = particle_handler.begin(); 
-		                                   particleIndex != particle_handler.end(); ++particleIndex){
-		output2 << velocity_x[particleIndex->get_id()] << " " << velocity_y[particleIndex->get_id()] << " 0" << std::endl;
-	}
+    TimerOutput::Scope timer_section(*timer, "Results output");
+    
+    DataOut<2> data_out;
+    
+    data_out.attach_dof_handler (dof_handlerVx);
+    data_out.add_data_vector (solutionVx, "Vx");
+    data_out.add_data_vector (solutionVy, "Vy");
+    data_out.add_data_vector (solutionP, "P");
+    
+    if(predictionCorrection){
+        data_out.add_data_vector (predictionVx, "predVx");
+        data_out.add_data_vector (predictionVy, "predVy");
+        data_out.add_data_vector (correctionVx, "corVx");
+        data_out.add_data_vector (correctionVy, "corVy");
+    }
+    
+    data_out.build_patches ();
+    
+    const std::string filename =  "solution-" + Utilities::int_to_string (timestep_number, 2) +    ".vtk";
+    std::ofstream output (filename.c_str());
+    data_out.write_vtk (output);
+    
+    //вывод частиц
+    const std::string filename2 =  "particles-" + Utilities::int_to_string (timestep_number, 2) + ".vtk";
+    std::ofstream output2 (filename2.c_str());
+    output2 << "# vtk DataFile Version 3.0" << std::endl;
+    output2 << "Unstructured Grid Example" << std::endl;
+    output2 << "ASCII" << std::endl;
+    output2 << std::endl;
+    output2 << "DATASET UNSTRUCTURED_GRID" << std::endl;
+    output2 << "POINTS " << particle_handler.n_global_particles() << " float" << std::endl;
+    for(std::unordered_multimap<int, pfem2Particle*>::iterator particleIndex = particle_handler.begin();
+        particleIndex != particle_handler.end(); ++particleIndex){
+        output2 << (*particleIndex).second->get_location() << " 0" << std::endl;
+    }
+    
+    output2 << std::endl;
+    
+    output2 << "CELLS " << particle_handler.n_global_particles() << " " << 2 * particle_handler.n_global_particles() << std::endl;
+    for (unsigned int i=0; i< particle_handler.n_global_particles(); ++i){
+        output2 << "1 " << i << std::endl;
+    }
+    
+    output2 << std::endl;
+    
+    output2 << "CELL_TYPES " << particle_handler.n_global_particles() << std::endl;
+    for (unsigned int i=0; i< particle_handler.n_global_particles(); ++i){
+        output2 << "1 ";
+    }
+    output2 << std::endl;
+    
+    output2 << std::endl;
+    
+    output2 << "POINT_DATA " << particle_handler.n_global_particles() << std::endl;
+    output2 << "VECTORS velocity float" << std::endl;
+    for(auto particleIndex = particle_handler.begin(); particleIndex != particle_handler.end(); ++particleIndex){
+        output2 << (*particleIndex).second->get_velocity_component(0) << " " << (*particleIndex).second->get_velocity_component(1) << " 0" << std::endl;
+    }
+    
+    output2 << std::endl;
 }
 
 /*!

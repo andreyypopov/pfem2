@@ -1,18 +1,18 @@
 #ifndef PFEM2PARTICLE_H
 #define PFEM2PARTICLE_H
 
-#define PARTICLES_MOVEMENT_STEPS 1
+#define PARTICLES_MOVEMENT_STEPS 3
 #define MAX_PARTICLES_PER_CELL_PART 3
 
 #include <iostream>
 #include <fstream>
 #include <cmath>
 #include <ctime>
+#include <unordered_map>
 
 #include <deal.II/base/tensor.h>
 #include <deal.II/base/timer.h>
 
-#include <deal.II/grid/tria.h>
 #include <deal.II/distributed/tria.h>
 
 #include <deal.II/dofs/dof_handler.h>
@@ -26,22 +26,89 @@
 
 #include <deal.II/fe/mapping_q1.h>
 #include <deal.II/base/subscriptor.h>
-#include <deal.II/particles/particle.h>
-#include <deal.II/particles/particle_handler.h>
 
 using namespace dealii;
-using namespace Particles;
 
-class pfem2Particle : public Particle<2>
+class pfem2Particle
 {
 public:
-	pfem2Particle(const Point<2> & location,const Point<2> & reference_location,const types::particle_index id);
+	pfem2Particle(const Point<2> & location,const Point<2> & reference_location,const unsigned int id);
 		
-	void setVelocity (const Tensor<1,2> &new_velocity);
-	const Tensor<1,2> & getVelocity() const;
+	void set_location (const Point<2> &new_location);
+	const Point<2> & get_location () const;
+	
+	void set_reference_location (const Point<2> &new_reference_location);
+	const Point<2> & get_reference_location () const;
+	
+	unsigned int get_id () const;
+	
+	void set_tria_position (const int &new_position);
+	
+	void set_map_position (const std::unordered_multimap<int, pfem2Particle*>::iterator &new_position);
+	const std::unordered_multimap<int, pfem2Particle*>::iterator & get_map_position () const;
+	
+	void set_velocity (const Tensor<1,2> &new_velocity);
+	void set_velocity_component (const double value, int component);
+	
+	const Tensor<1,2> & get_velocity_ext() const;
+	void set_velocity_ext (const Tensor<1,2> &new_ext_velocity);
+	
+	const Tensor<1,2> & get_velocity() const;
+	double get_velocity_component(int component) const;
+	
+	Triangulation<2>::cell_iterator get_surrounding_cell(const Triangulation<2> &triangulation) const;
+	
+	unsigned int find_closest_vertex_of_cell(const typename Triangulation<2>::active_cell_iterator &cell, const Mapping<2> &mapping);
 	
 private:
-	Tensor<1,2> velocity;						//!< Скорость, которую переносит частица
+	Point<2> location;
+	Point<2> reference_location;
+	unsigned int id;
+
+	int tria_position;
+	std::unordered_multimap<int, pfem2Particle*>::iterator map_position;
+
+	Tensor<1,2> velocity;						 //!< Скорость, которую переносит частица
+	Tensor<1,2> velocity_ext;					 //!< Внешняя скорость (с которой частица переносится)
+};
+
+class pfem2ParticleHandler
+{
+public:
+	pfem2ParticleHandler(const parallel::distributed::Triangulation<2> &tria, const Mapping<2> &coordMapping);
+	~pfem2ParticleHandler();
+	
+	void clear();
+	void clear_particles();
+	
+	void remove_particle(const pfem2Particle *particle);
+	void insert_particle(pfem2Particle *particle, const typename Triangulation<2>::active_cell_iterator &cell);
+	
+	unsigned int n_global_particles() const;
+ 
+    unsigned int n_global_max_particles_per_cell() const;
+ 
+    unsigned int n_locally_owned_particles() const;
+    
+    unsigned int n_particles_in_cell(const typename Triangulation<2>::active_cell_iterator &cell) const;
+    
+    void sort_particles_into_subdomains_and_cells();
+    
+    std::unordered_multimap<int, pfem2Particle*>::iterator begin();
+    std::unordered_multimap<int, pfem2Particle*>::iterator end();
+    
+    std::unordered_multimap<int, pfem2Particle*>::iterator particles_in_cell_begin(const typename Triangulation<2>::active_cell_iterator &cell);
+    std::unordered_multimap<int, pfem2Particle*>::iterator particles_in_cell_end(const typename Triangulation<2>::active_cell_iterator &cell);
+    
+private:
+    SmartPointer<const parallel::distributed::Triangulation<2>, pfem2ParticleHandler> triangulation;
+    SmartPointer<const Mapping<2>,pfem2ParticleHandler> mapping;
+    
+    std::unordered_multimap<int, pfem2Particle*> particles;
+    
+    unsigned int global_number_of_particles;
+ 
+    unsigned int global_max_particles_per_cell;
 };
 
 class pfem2Solver
@@ -99,24 +166,28 @@ public:
 	Vector<double> solutionVx, solutionVy, solutionP, correctionVx, correctionVy, predictionVx, predictionVy;	//!< Вектор решения, коррекции и прогноза на текущем шаге по времени
 	Vector<double> old_solutionVx, old_solutionVy, old_solutionP;		//!< Вектор решения на предыдущем шаге по времени (используется для вычисления разности с текущим и последующей коррекции скоростей частиц)
 	Vector<double> vel_in_px, vel_in_py;
-	std::map<int, double> velocity_x, velocity_y;
 	
 	parallel::distributed::Triangulation<2> tria;
-	ParticleHandler<2,2> particle_handler;
+	MappingQ1<2> mapping;
+	
+	pfem2ParticleHandler particle_handler;
 	FE_Q<2>  			 feVx, feVy, feP;
+	FESystem<2> 		 fe;
 	DoFHandler<2>        dof_handlerVx, dof_handlerVy, dof_handlerP;
 	TimerOutput			 *timer;
+	
+	std::vector<unsigned int> probeDoFnumbers;
 	
 protected:
 	void seed_particles_into_cell (const typename DoFHandler<2>::cell_iterator &cell);
 	bool check_cell_for_empty_parts (const typename DoFHandler<2>::cell_iterator &cell);
-	
-	MappingQ1<2> mapping;
 	
 private:	
 	std::vector < unsigned int > quantities;
 	int particleCount = 0;
 	time_t solutionTime, startTime;
 };
+
+bool compare_particle_association(const unsigned int a, const unsigned int b, const Tensor<1,2> &particle_direction, const std::vector<Tensor<1,2> > &center_directions);
 
 #endif // PFEM2PARTICLE_H
