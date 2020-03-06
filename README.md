@@ -6,3 +6,4 @@ List of test cases:
 2) 2D Poiseuille flow (two options of BCs);
 3) 2D river discharge into ocean
 4) 2D flow past a circular cylinder (cases with fixed and moving mesh)
+5) 3D Poiseuille flow (dp/dn-driven)
