@@ -1,0 +1,1 @@
+./TurekBenchmark | tee log.txt
