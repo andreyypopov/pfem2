@@ -7,4 +7,5 @@ List of test cases:
 3) 2D river discharge into ocean
 4) 2D flow past a circular cylinder (cases with fixed and moving mesh)
 5) 2D flow past a NACA 0012-airfoil (4 degree angle)
-6) 3D Poiseuille flow (dp/dn-driven)
+6) 2D Turek-Schaeffer benchmark
+7) 3D Poiseuille flow (dp/dn-driven)
