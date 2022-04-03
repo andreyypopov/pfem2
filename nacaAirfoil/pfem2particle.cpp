@@ -29,7 +29,12 @@
 #include <deal.II/base/tensor.h>
 #include <deal.II/grid/tria_accessor.h>
 
+#include <deal.II/lac/precondition.h>
+#include <deal.II/lac/solver_gmres.h>
+
 #include "omp.h"
+
+using namespace dealii;
 
 pfem2Particle::pfem2Particle(const Point<2> & location,const Point<2> & reference_location,const unsigned id)
 	: location (location),
@@ -38,6 +43,23 @@ pfem2Particle::pfem2Particle(const Point<2> & location,const Point<2> & referenc
 	velocity({0,0})
 {
 
+}
+
+pfem2Particle::pfem2Particle(const void *&data)
+{
+	const types::particle_index *id_data = static_cast<const types::particle_index *> (data);
+    id = *id_data++;
+    tria_position = *id_data++;
+    const double *pdata = reinterpret_cast<const double *> (id_data);
+
+    for (unsigned int i = 0; i < 2; ++i) location(i) = *pdata++;
+
+    for (unsigned int i = 0; i < 2; ++i) reference_location(i) = *pdata++;
+
+    for (unsigned int i = 0; i < 2; ++i) velocity[i] = *pdata++;
+    for (unsigned int i = 0; i < 2; ++i) velocity_ext[i] = *pdata++;
+
+    data = static_cast<const void *> (pdata);
 }
 
 void pfem2Particle::set_location (const Point<2> &new_location)
@@ -143,6 +165,40 @@ unsigned int pfem2Particle::find_closest_vertex_of_cell(const typename Triangula
 	return closest_vertex;
 }
 
+std::size_t pfem2Particle::serialized_size_in_bytes() const
+{
+	std::size_t size = sizeof(id) + sizeof(location) + sizeof(reference_location) + sizeof(tria_position)
+		+ sizeof(velocity) + sizeof(velocity_ext);
+
+	return size;
+}
+
+void pfem2Particle::write_data (void *&data) const
+{
+	unsigned int *id_data  = static_cast<unsigned int*> (data);
+    *id_data = id;
+    ++id_data;
+    
+    *id_data = tria_position;
+    ++id_data;
+    
+    double *pdata = reinterpret_cast<double *> (id_data);
+
+    // Write location data
+    for (unsigned int i = 0; i < 2; ++i,++pdata) *pdata = location(i);
+
+    // Write reference location data
+    for (unsigned int i = 0; i < 2; ++i,++pdata) *pdata = reference_location(i);
+    
+    // Write velocity
+    for (unsigned int i = 0; i < 2; ++i,++pdata) *pdata = velocity[i];
+    
+    // Write streamline velocity
+    for (unsigned int i = 0; i < 2; ++i,++pdata) *pdata = velocity_ext[i];
+     
+    data = static_cast<void *> (pdata);
+}
+
 pfem2ParticleHandler::pfem2ParticleHandler(const parallel::distributed::Triangulation<2> &tria, const Mapping<2> &coordMapping)
 	: triangulation(&tria, typeid(*this).name())
 	, mapping(&coordMapping, typeid(*this).name())
@@ -156,6 +212,13 @@ pfem2ParticleHandler::~pfem2ParticleHandler()
 	clear_particles();
 }
 
+void pfem2ParticleHandler::initialize_maps()
+{
+	vertex_to_cells = std::vector<std::set<typename Triangulation<2>::active_cell_iterator>>(GridTools::vertex_to_cell_map(*triangulation));
+    vertex_to_cell_centers = std::vector<std::vector<Tensor<1,2>>>(GridTools::vertex_to_cell_centers_directions(*triangulation,vertex_to_cells));	  
+}
+
+
 void pfem2ParticleHandler::clear()
 {
 	clear_particles();
@@ -165,7 +228,6 @@ void pfem2ParticleHandler::clear()
 
 void pfem2ParticleHandler::clear_particles()
 {
-	for(auto particleIndex = particles.begin(); particleIndex != particles.end(); ++particleIndex) delete (*particleIndex).second;
 	particles.clear();
 }
 
@@ -244,14 +306,22 @@ void pfem2ParticleHandler::sort_particles_into_subdomains_and_cells()
 #endif // VERBOSE_OUTPUT
 	
 	std::vector<std::pair<int, pfem2Particle*>> sorted_particles;
-	std::vector<std::unordered_multimap<int, pfem2Particle*>::iterator> moved_particles, particles_to_be_deleted;
+	std::vector<std::unordered_multimap<int, pfem2Particle*>::iterator> particles_to_be_deleted;
+	std::map<unsigned int, std::vector<std::unordered_multimap<int, pfem2Particle*>::iterator>> moved_particles;
+	std::map<unsigned int, std::vector<Triangulation<2>::active_cell_iterator>> moved_cells;
 	
-	typedef typename std::vector<std::pair<int, pfem2Particle*>>::size_type vector_size;
-	typedef typename std::vector<std::unordered_multimap<int, pfem2Particle*>::iterator>::size_type vector_size2;
+	//typedef typename std::vector<std::pair<int, pfem2Particle*>>::size_type vector_size;
+	typedef typename std::vector<std::unordered_multimap<int, pfem2Particle*>::iterator>::size_type vector_size;
 	
-	sorted_particles.reserve(static_cast<vector_size> (particles_out_of_cell.size()*1.25));
-	moved_particles.reserve(static_cast<vector_size2> (particles_out_of_cell.size()*1.25));
-	particles_to_be_deleted.reserve(static_cast<vector_size2> (particles_out_of_cell.size()*1.25));
+	sorted_particles.reserve(static_cast<vector_size> (particles_out_of_cell.size() * 1.25));
+	particles_to_be_deleted.reserve(static_cast<vector_size> (particles_out_of_cell.size() * 0.25));
+
+	const std::set<unsigned int> ghost_owners = triangulation->ghost_owners();
+
+    for (auto ghost_domain_id = ghost_owners.begin(); ghost_domain_id != ghost_owners.end(); ++ghost_domain_id){
+		moved_particles[*ghost_domain_id].reserve(static_cast<vector_size> (particles_out_of_cell.size() * 0.25));
+		moved_cells[*ghost_domain_id].reserve(static_cast<vector_size> (particles_out_of_cell.size() * 0.25));
+	}
 
 #ifdef VERBOSE_OUTPUT
 	double prepareToSortClock;
@@ -265,12 +335,9 @@ void pfem2ParticleHandler::sort_particles_into_subdomains_and_cells()
 #endif // VERBOSE_OUTPUT
 			
 	{
-      const std::vector<std::set<typename Triangulation<2>::active_cell_iterator>> vertex_to_cells(GridTools::vertex_to_cell_map(*triangulation));
-      const std::vector<std::vector<Tensor<1,2>>> vertex_to_cell_centers(GridTools::vertex_to_cell_centers_directions(*triangulation,vertex_to_cells));
 	  std::vector<unsigned int> neighbor_permutation;
 
 #ifdef VERBOSE_OUTPUT
-	  std::cout << "Finished building vertex to cell and cell centers map" << std::endl;
 	  prepareToSortClock = omp_get_wtime();
 	  int numOutOfMesh = 0;
 #endif // VERBOSE_OUTPUT
@@ -345,29 +412,8 @@ void pfem2ParticleHandler::sort_particles_into_subdomains_and_cells()
 #ifdef VERBOSE_OUTPUT
               ++numOutOfMesh;
 #endif // VERBOSE_OUTPUT
-              
               particles_to_be_deleted.push_back(particle);
               continue;
-                      
-/*                      
-			  t1 = omp_get_wtime();          
-			  try {
-                  const std::pair<const typename Triangulation<2>::active_cell_iterator, Point<2> > current_cell_and_position =
-                          GridTools::find_active_cell_around_point<2> (*mapping, *triangulation, (*particle).second->get_location());
-              
-                  current_cell = current_cell_and_position.first;
-                  current_reference_position = current_cell_and_position.second;
-                  //std::cout << "Particle found in a far away cell" << std::endl;
-              } catch (GridTools::ExcPointNotFound<2> &){				  
-				  particles_to_be_deleted.push_back(particle);
-				  //std::cout << "Particle not found" << std::endl;
-				  ++numOutOfMesh;
-				  t2 = omp_get_wtime();
-				  
-				  catchClocks += t2-t1;
-				  continue;
-			  }
-*/
           }
                     
 #ifdef VERBOSE_OUTPUT
@@ -376,8 +422,12 @@ void pfem2ParticleHandler::sort_particles_into_subdomains_and_cells()
 #endif // VERBOSE_OUTPUT
           
           (*particle).second->set_reference_location(current_reference_position);
-          sorted_particles.push_back(std::make_pair(current_cell->index(), (*particle).second));
-          moved_particles.push_back(particle);
+          if(current_cell->is_locally_owned()) sorted_particles.push_back(std::make_pair(current_cell->index(), (*particle).second));
+          else {
+			  moved_particles[current_cell->subdomain_id()].push_back(particle);
+			  moved_cells[current_cell->subdomain_id()].push_back(current_cell);
+			  particles_to_be_deleted.push_back(particle);
+		  }
                    
 #ifdef VERBOSE_OUTPUT
           double particleFinalizationEnd = omp_get_wtime();
@@ -397,30 +447,43 @@ void pfem2ParticleHandler::sort_particles_into_subdomains_and_cells()
 #endif // VERBOSE_OUTPUT
 	
 	std::unordered_multimap<int,pfem2Particle*> sorted_particles_map;
+	
+	#ifdef DEAL_II_WITH_MPI
+	if(dealii::Utilities::MPI::n_mpi_processes(triangulation->get_communicator()) > 1)
+      send_recv_particles(moved_particles,sorted_particles_map,moved_cells);
+#endif
+	
 	sorted_particles_map.insert(sorted_particles.begin(), sorted_particles.end());
 	
 #ifdef VERBOSE_OUTPUT
 	double presortingEnd = omp_get_wtime();
 #endif // VERBOSE_OUTPUT
 		
-	for (unsigned int i=0; i<particles_to_be_deleted.size(); ++i){
+	for (unsigned int i = 0; i < particles_to_be_deleted.size(); ++i){
 		auto particle = particles_to_be_deleted[i];
+		
 		delete (*particle).second;
+	}
+
+	for (unsigned int i = 0; i < particles_out_of_cell.size(); ++i){
+		auto particle = particles_out_of_cell[i];
 		particles.erase(particle);
 	}
 	
 #ifdef VERBOSE_OUTPUT
 	double particlesDeleteClock = omp_get_wtime();
 #endif // VERBOSE_OUTPUT
-	
-	for (unsigned int i=0; i<moved_particles.size(); ++i) particles.erase(moved_particles[i]);
 
+	/*for (auto ghost_domain_id = ghost_owners.begin(); ghost_domain_id != ghost_owners.end(); ++ghost_domain_id)
+		for (unsigned int i=0; i<moved_particles[*ghost_domain_id].size(); ++i)
+			particles.erase(moved_particles[*ghost_domain_id][i]);*/
+	
 #ifdef VERBOSE_OUTPUT
 	double movedParticlesEraseClock = omp_get_wtime();
 #endif // VERBOSE_OUTPUT
-	
+
 	particles.insert(sorted_particles_map.begin(),sorted_particles_map.end());
-	
+
 #ifdef VERBOSE_OUTPUT
 	double end = omp_get_wtime();
 	
@@ -444,6 +507,144 @@ void pfem2ParticleHandler::sort_particles_into_subdomains_and_cells()
 #endif // VERBOSE_OUTPUT
 }
 
+#ifdef DEAL_II_WITH_MPI
+void pfem2ParticleHandler::send_recv_particles(const std::map<unsigned int, std::vector<std::unordered_multimap<int, pfem2Particle*>::iterator>> &particles_to_send,
+                                                     std::unordered_multimap<int, pfem2Particle*> &received_particles,
+                                                     const std::map<unsigned int, std::vector<typename Triangulation<2>::active_cell_iterator>> &send_cells)
+{
+    // Determine the communication pattern
+    const std::set<unsigned int> ghost_owners = triangulation->ghost_owners();
+    const std::vector<unsigned int> neighbors (ghost_owners.begin(), ghost_owners.end());
+    const unsigned int n_neighbors = neighbors.size();
+
+    if (send_cells.size() != 0)
+      Assert (particles_to_send.size() == send_cells.size(), ExcInternalError());
+
+    // If we do not know the subdomain this particle needs to be send to, throw an error
+    Assert (particles_to_send.find(numbers::artificial_subdomain_id) == particles_to_send.end(), ExcInternalError());
+
+    // TODO: Implement the shipping of particles to processes that are not ghost owners of the local domain
+    for (auto send_particles = particles_to_send.begin(); send_particles != particles_to_send.end(); ++send_particles)
+      Assert(ghost_owners.find(send_particles->first) != ghost_owners.end(), ExcNotImplemented());
+
+    unsigned int n_send_particles = 0;
+    for (auto send_particles = particles_to_send.begin(); send_particles != particles_to_send.end(); ++send_particles)
+		n_send_particles += send_particles->second.size();
+
+    const unsigned int cellid_size = sizeof(CellId::binary_type);
+
+    // Containers for the amount and offsets of data we will send to other processors and the data itself.
+    std::vector<unsigned int> n_send_data(n_neighbors,0);
+    std::vector<unsigned int> send_offsets(n_neighbors,0);
+    std::vector<char> send_data;
+
+    // Only serialize things if there are particles to be send.
+    // We can not return early even if no particles are send, because we might receive particles from other processes
+    if (n_send_particles){
+        // Allocate space for sending particle data
+        auto firstParticle = begin();
+        const unsigned int particle_size = firstParticle->second->serialized_size_in_bytes() + cellid_size;
+        send_data.resize(n_send_particles * particle_size);
+        void *data = static_cast<void *> (&send_data.front());
+
+        // Serialize the data sorted by receiving process
+        for (unsigned int i = 0; i<n_neighbors; ++i){
+            send_offsets[i] = reinterpret_cast<std::size_t> (data) - reinterpret_cast<std::size_t> (&send_data.front());
+
+            for (unsigned int j=0; j<particles_to_send.at(neighbors[i]).size(); ++j){
+				auto particleIndex = particles_to_send.at(neighbors[i])[j];
+				
+                // If no target cells are given, use the iterator information
+                typename Triangulation<2>::active_cell_iterator cell;
+                if (!send_cells.size()) cell = particleIndex->second->get_surrounding_cell(*triangulation);
+                else cell = send_cells.at(neighbors[i])[j];
+
+                const CellId::binary_type cellid = cell->id().template to_binary<2>();
+                memcpy(data, &cellid, cellid_size);
+                data = static_cast<char *>(data) + cellid_size;
+
+                particleIndex->second->write_data(data);
+            }
+            n_send_data[i] = reinterpret_cast<std::size_t> (data) - send_offsets[i] - reinterpret_cast<std::size_t> (&send_data.front());
+        }
+    }
+
+    // Containers for the data we will receive from other processors
+    std::vector<unsigned int> n_recv_data(n_neighbors);
+    std::vector<unsigned int> recv_offsets(n_neighbors);
+
+    // Notify other processors how many particles we will send
+    {
+      std::vector<MPI_Request> n_requests(2*n_neighbors);
+      for (unsigned int i=0; i<n_neighbors; ++i){
+          const int ierr = MPI_Irecv(&(n_recv_data[i]), 1, MPI_INT, neighbors[i], 0, triangulation->get_communicator(), &(n_requests[2*i]));
+          AssertThrowMPI(ierr);
+      }
+      
+      for (unsigned int i=0; i<n_neighbors; ++i){
+          const int ierr = MPI_Isend(&(n_send_data[i]), 1, MPI_INT, neighbors[i], 0, triangulation->get_communicator(), &(n_requests[2*i+1]));
+          AssertThrowMPI(ierr);
+      }
+
+      const int ierr = MPI_Waitall(2*n_neighbors,&n_requests[0],MPI_STATUSES_IGNORE);
+      AssertThrowMPI(ierr);
+    }
+
+    // Determine how many particles and data we will receive
+    unsigned int total_recv_data = 0;
+    for (unsigned int neighbor_id=0; neighbor_id<n_neighbors; ++neighbor_id){
+        recv_offsets[neighbor_id] = total_recv_data;
+        total_recv_data += n_recv_data[neighbor_id];
+    }
+
+    // Set up the space for the received particle data
+    std::vector<char> recv_data(total_recv_data);
+
+    // Exchange the particle data between domains
+    {
+      std::vector<MPI_Request> requests(2*n_neighbors);
+      unsigned int send_ops = 0;
+      unsigned int recv_ops = 0;
+
+      for (unsigned int i=0; i<n_neighbors; ++i)
+          if (n_recv_data[i] > 0){
+              const int ierr = MPI_Irecv(&(recv_data[recv_offsets[i]]), n_recv_data[i], MPI_CHAR, neighbors[i], 1, triangulation->get_communicator(), &(requests[send_ops]));
+              AssertThrowMPI(ierr);
+              send_ops++;
+          }
+
+      for (unsigned int i=0; i<n_neighbors; ++i)
+          if (n_send_data[i] > 0){
+              const int ierr = MPI_Isend(&(send_data[send_offsets[i]]), n_send_data[i], MPI_CHAR, neighbors[i], 1, triangulation->get_communicator(), &(requests[send_ops+recv_ops]));
+              AssertThrowMPI(ierr);
+              recv_ops++;
+          }
+          
+      const int ierr = MPI_Waitall(send_ops+recv_ops,&requests[0],MPI_STATUSES_IGNORE);
+      AssertThrowMPI(ierr);
+    }
+
+    // Put the received particles into the domain if they are in the triangulation
+    const void *recv_data_it = static_cast<const void *> (recv_data.data());
+
+    while (reinterpret_cast<std::size_t> (recv_data_it) - reinterpret_cast<std::size_t> (recv_data.data()) < total_recv_data){
+        CellId::binary_type binary_cellid;
+        memcpy(&binary_cellid, recv_data_it, cellid_size);
+        const CellId id(binary_cellid);
+        recv_data_it = static_cast<const char *> (recv_data_it) + cellid_size;
+
+        const typename Triangulation<2>::active_cell_iterator cell = id.to_cell(*triangulation);
+
+		pfem2Particle* newParticle = new pfem2Particle(recv_data_it);
+        typename std::unordered_multimap<int, pfem2Particle*>::iterator recv_particle = received_particles.insert(std::make_pair(cell->index(), newParticle));
+        newParticle->set_map_position(recv_particle);
+    }
+
+    AssertThrow(recv_data_it == recv_data.data() + recv_data.size(),
+                ExcMessage("The amount of data that was read into new particles does not match the amount of data sent around."));
+}
+#endif
+
 std::unordered_multimap<int, pfem2Particle*>::iterator pfem2ParticleHandler::begin()
 {
 	return particles.begin();
@@ -465,15 +666,29 @@ std::unordered_multimap<int, pfem2Particle*>::iterator pfem2ParticleHandler::par
 }
 
 pfem2Solver::pfem2Solver()
-	: tria(MPI_COMM_WORLD,Triangulation<2>::maximum_smoothing),
+	: mpi_communicator (MPI_COMM_WORLD),
+	tria(mpi_communicator,Triangulation<2>::maximum_smoothing),
 	particle_handler(tria, mapping),
-	feVx (1),
-	feVy (1),
+	feV (1),
 	feP (1),
 	fe(FE_Q<2>(1), 1),
-	dof_handlerVx (tria),
-	dof_handlerVy (tria),
+	dof_handlerV (tria),
 	dof_handlerP (tria),
+	quadrature_formula(2),
+	face_quadrature_formula(2),
+	feV_values (feV, quadrature_formula, update_values | update_gradients | update_quadrature_points | update_JxW_values),
+	feP_values (feP, quadrature_formula, update_values | update_gradients | update_quadrature_points | update_JxW_values),
+	feV_face_values (feV, face_quadrature_formula, update_values | update_quadrature_points  | update_gradients | update_normal_vectors | update_JxW_values),
+	feP_face_values (feP, face_quadrature_formula, update_values | update_quadrature_points  | update_gradients | update_normal_vectors | update_JxW_values),
+	dofs_per_cellV (feV.dofs_per_cell),
+	dofs_per_cellP (feP.dofs_per_cell),
+	local_dof_indicesV (dofs_per_cellV),
+	local_dof_indicesP (dofs_per_cellP),
+	n_mpi_processes (Utilities::MPI::n_mpi_processes(mpi_communicator)),
+    this_mpi_process (Utilities::MPI::this_mpi_process(mpi_communicator)),
+	pcout (std::cout,(this_mpi_process == 0)),
+	n_q_points (quadrature_formula.size()),
+	n_face_q_points (face_quadrature_formula.size()),
 	quantities({0,0})
 {
 	
@@ -481,7 +696,7 @@ pfem2Solver::pfem2Solver()
 
 pfem2Solver::~pfem2Solver()
 {
-	
+
 }
 
 void pfem2Solver::seed_particles_into_cell (const typename DoFHandler<2>::cell_iterator &cell)
@@ -499,20 +714,20 @@ void pfem2Solver::seed_particles_into_cell (const typename DoFHandler<2>::cell_i
 			for (unsigned int vertex=0; vertex<GeometryInfo<2>::vertices_per_cell; ++vertex){
 				shapeValue = fe.shape_value(vertex, particle->get_reference_location());
 
-				particle->set_velocity_component(particle->get_velocity_component(0) + shapeValue * solutionVx(cell->vertex_dof_index(vertex,0)), 0);
-				particle->set_velocity_component(particle->get_velocity_component(1) + shapeValue * solutionVy(cell->vertex_dof_index(vertex,0)), 1);
+				particle->set_velocity_component(particle->get_velocity_component(0) + shapeValue * locally_relevant_solutionVx(cell->vertex_dof_index(vertex,0)), 0);
+				particle->set_velocity_component(particle->get_velocity_component(1) + shapeValue * locally_relevant_solutionVy(cell->vertex_dof_index(vertex,0)), 1);
 			}//vertex
 		}
 	}
 }
 
-  bool pfem2Solver::check_cell_for_empty_parts (const typename DoFHandler<2>::cell_iterator &cell)
+bool pfem2Solver::check_cell_for_empty_parts (const typename DoFHandler<2>::cell_iterator &cell)
 {
 	bool res = false;
-	
+
 	std::map<std::vector<unsigned int>, unsigned int> particlesInParts;
 	std::vector<std::unordered_multimap<int, pfem2Particle*>::iterator> particles_to_be_deleted;
-	
+
 	//определение, в каких частях ячейки лежат частицы
 	double hx = 1.0/quantities[0];
 	double hy = 1.0/quantities[1];
@@ -529,8 +744,8 @@ void pfem2Solver::seed_particles_into_cell (const typename DoFHandler<2>::cell_i
 	double shapeValue;
 	
 	//проверка каждой части ячейки на количество частиц: при 0 - подсевание 1 частицы в центр
-	for(unsigned int i = 0; i < quantities[0]; i++){
-		for(unsigned int j = 0; j < quantities[1]; j++){			
+	for(unsigned int i = 0; i < quantities[0]; i++)
+		for(unsigned int j = 0; j < quantities[1]; j++)
 			if(!particlesInParts[{i,j}]){
 				pfem2Particle* particle = new pfem2Particle(mapping.transform_unit_to_real_cell(cell, Point<2>((i + 1.0/2)*hx, (j+1.0/2)*hy)), Point<2>((i + 1.0/2)*hx, (j+1.0/2)*hy), ++particleCount);
 				particle_handler.insert_particle(particle, cell);
@@ -538,14 +753,12 @@ void pfem2Solver::seed_particles_into_cell (const typename DoFHandler<2>::cell_i
 				for (unsigned int vertex=0; vertex<GeometryInfo<2>::vertices_per_cell; ++vertex){
 					shapeValue = fe.shape_value(vertex, particle->get_reference_location());
 
-					particle->set_velocity_component(particle->get_velocity_component(0) + shapeValue * solutionVx(cell->vertex_dof_index(vertex,0)), 0);
-					particle->set_velocity_component(particle->get_velocity_component(1) + shapeValue * solutionVy(cell->vertex_dof_index(vertex,0)), 1);
+					particle->set_velocity_component(particle->get_velocity_component(0) + shapeValue * locally_relevant_solutionVx(cell->vertex_dof_index(vertex,0)), 0);
+					particle->set_velocity_component(particle->get_velocity_component(1) + shapeValue * locally_relevant_solutionVy(cell->vertex_dof_index(vertex,0)), 1);
 				}//vertex
 				
 				res = true;
 			}
-		}
-	}
 	
 	//удаление лишних частиц
 	for(unsigned int i = 0; i < particles_to_be_deleted.size(); ++i){
@@ -567,8 +780,9 @@ void pfem2Solver::seed_particles(const std::vector < unsigned int > & quantities
 	
 	this->quantities = quantities;
 	
-	typename DoFHandler<2>::cell_iterator cell = dof_handlerVx.begin(tria.n_levels()-1), endc = dof_handlerVx.end(tria.n_levels()-1);
-	for (; cell != endc; ++cell) seed_particles_into_cell(cell);
+	typename DoFHandler<2>::cell_iterator cell = dof_handlerV.begin(tria.n_levels()-1), endc = dof_handlerV.end(tria.n_levels()-1);
+	for (; cell != endc; ++cell)
+		if (cell->is_locally_owned()) seed_particles_into_cell(cell);
 	
 	//particle_handler.update_cached_numbers();
 	
@@ -582,19 +796,17 @@ void pfem2Solver::correct_particles_velocities()
 	
 	double shapeValue;
 			
-	typename DoFHandler<2>::cell_iterator cell = dof_handlerVx.begin(tria.n_levels()-1), endc = dof_handlerVx.end(tria.n_levels()-1);
-	for (; cell != endc; ++cell) {
-		for(auto particleIndex = particle_handler.particles_in_cell_begin(cell); 
-		                                   particleIndex != particle_handler.particles_in_cell_end(cell); ++particleIndex) {
-		
-			for (unsigned int vertex=0; vertex<GeometryInfo<2>::vertices_per_cell; ++vertex){
-				shapeValue = fe.shape_value(vertex, (*particleIndex).second->get_reference_location());
+	typename DoFHandler<2>::cell_iterator cell = dof_handlerV.begin(tria.n_levels()-1), endc = dof_handlerV.end(tria.n_levels()-1);
+	for (; cell != endc; ++cell)
+		if(cell->is_locally_owned())
+			for(auto particleIndex = particle_handler.particles_in_cell_begin(cell); 
+		                                   particleIndex != particle_handler.particles_in_cell_end(cell); ++particleIndex)
+				for (unsigned int vertex=0; vertex<GeometryInfo<2>::vertices_per_cell; ++vertex){
+					shapeValue = fe.shape_value(vertex, (*particleIndex).second->get_reference_location());
 
-				(*particleIndex).second->set_velocity_component((*particleIndex).second->get_velocity_component(0) + shapeValue * ( solutionVx(cell->vertex_dof_index(vertex,0)) - old_solutionVx(cell->vertex_dof_index(vertex,0)) ), 0);
-				(*particleIndex).second->set_velocity_component((*particleIndex).second->get_velocity_component(1) + shapeValue * ( solutionVy(cell->vertex_dof_index(vertex,0)) - old_solutionVy(cell->vertex_dof_index(vertex,0)) ), 1);
-			}//vertex
-		}//particle
-	}//cell
+					(*particleIndex).second->set_velocity_component((*particleIndex).second->get_velocity_component(0) + shapeValue * ( locally_relevant_solutionVx(cell->vertex_dof_index(vertex,0)) - locally_relevant_old_solutionVx(cell->vertex_dof_index(vertex,0)) ), 0);
+					(*particleIndex).second->set_velocity_component((*particleIndex).second->get_velocity_component(1) + shapeValue * ( locally_relevant_solutionVy(cell->vertex_dof_index(vertex,0)) - locally_relevant_old_solutionVy(cell->vertex_dof_index(vertex,0)) ), 1);
+				}//vertex
 	
 	//std::cout << "Finished correcting particles' velocities" << std::endl;	
 }
@@ -610,35 +822,38 @@ void pfem2Solver::move_particles() //перенос частиц
 	
 	for (int np_m = 0; np_m < PARTICLES_MOVEMENT_STEPS; ++np_m) {
 		//РАЗДЕЛИТЬ НА VX И VY!!!!!!!!
-		typename DoFHandler<2>::cell_iterator cell = dof_handlerVx.begin(tria.n_levels()-1), endc = dof_handlerVx.end(tria.n_levels()-1);
+		typename DoFHandler<2>::cell_iterator cell = dof_handlerV.begin(tria.n_levels()-1), endc = dof_handlerV.end(tria.n_levels()-1);
 		
-		for (; cell != endc; ++cell) {
-			for( auto particleIndex = particle_handler.particles_in_cell_begin(cell); 
+		for (; cell != endc; ++cell) 
+			if (cell->is_locally_owned())
+				for( auto particleIndex = particle_handler.particles_in_cell_begin(cell); 
 		                                   particleIndex != particle_handler.particles_in_cell_end(cell); ++particleIndex ) {
 
-				vel_in_part = Tensor<1,2> ({0,0});
+					vel_in_part = Tensor<1,2> ({0,0});
 				
-				for (unsigned int vertex=0; vertex<GeometryInfo<2>::vertices_per_cell; ++vertex){
-					shapeValue = fe.shape_value(vertex, (*particleIndex).second->get_reference_location());
-					vel_in_part[0] += shapeValue * solutionVx(cell->vertex_dof_index(vertex,0));
-					vel_in_part[1] += shapeValue * solutionVy(cell->vertex_dof_index(vertex,0));
-				}//vertex
-				
-				vel_in_part[0] *= min_time_step;
-				vel_in_part[1] *= min_time_step;
-				
-				(*particleIndex).second->set_location((*particleIndex).second->get_location() + vel_in_part);
-				(*particleIndex).second->set_velocity_ext(vel_in_part);
-			}//particle
-		}//cell
-		
+					for (unsigned int vertex=0; vertex<GeometryInfo<2>::vertices_per_cell; ++vertex){
+						shapeValue = fe.shape_value(vertex, (*particleIndex).second->get_reference_location());
+						vel_in_part[0] += shapeValue * locally_relevant_solutionVx(cell->vertex_dof_index(vertex,0));
+						vel_in_part[1] += shapeValue * locally_relevant_solutionVy(cell->vertex_dof_index(vertex,0));
+					}//vertex
+
+					(*particleIndex).second->set_velocity_ext(vel_in_part);
+
+					vel_in_part[0] *= min_time_step;
+					vel_in_part[1] *= min_time_step;
+
+					(*particleIndex).second->set_location((*particleIndex).second->get_location() + vel_in_part);					
+				}//particle
+
+//		timer->enter_subsection("Particles' sorting");
 		particle_handler.sort_particles_into_subdomains_and_cells();
+//		timer->leave_subsection();
 	}//np_m
 	
 	//проверка наличия пустых ячеек (без частиц) и размещение в них частиц
-	typename DoFHandler<2>::cell_iterator cell = dof_handlerVx.begin(tria.n_levels()-1), endc = dof_handlerVx.end(tria.n_levels()-1);
-	
-	for (; cell != endc; ++cell) check_cell_for_empty_parts(cell);
+	typename DoFHandler<2>::cell_iterator cell = dof_handlerV.begin(tria.n_levels()-1), endc = dof_handlerV.end(tria.n_levels()-1);	
+	for (; cell != endc; ++cell)
+		if (cell->is_locally_owned()) check_cell_for_empty_parts(cell);
 	
 	//std::cout << "Finished moving particles" << std::endl;
 }
@@ -647,40 +862,94 @@ void pfem2Solver::distribute_particle_velocities_to_grid() //перенос ск
 {	
 	TimerOutput::Scope timer_section(*timer, "Distribution of particles' velocities to grid nodes");
 		
-	Vector<double> node_velocityX, node_velocityY;
-	Vector<double> node_weights;
+	TrilinosWrappers::MPI::Vector node_velocityX, node_velocityY, node_weights;
 	
 	double shapeValue;
 	
-	node_velocityX.reinit (tria.n_vertices(), 0.0);
-	node_velocityY.reinit (tria.n_vertices(), 0.0);
-	node_weights.reinit (tria.n_vertices(), 0.0);
+	node_velocityX.reinit (locally_owned_dofsV, mpi_communicator);
+	node_velocityY.reinit (locally_owned_dofsV, mpi_communicator);
+	node_weights.reinit (locally_owned_dofsV, mpi_communicator);
 	
-	typename DoFHandler<2>::cell_iterator cell = dof_handlerVx.begin(tria.n_levels()-1), endc = dof_handlerVx.end(tria.n_levels()-1);
-	for (; cell != endc; ++cell) {
+	Vector<double> local_Vx(dofs_per_cellV);
+	Vector<double> local_Vy(dofs_per_cellV);
+	Vector<double> local_weights(dofs_per_cellV);
+
+	node_velocityX = 0.0;
+	node_velocityY = 0.0;
+	node_weights = 0.0;
 	
-		for (unsigned int vertex=0; vertex<GeometryInfo<2>::vertices_per_cell; ++vertex){
+	typename DoFHandler<2>::cell_iterator cell = dof_handlerV.begin(tria.n_levels()-1), endc = dof_handlerV.end(tria.n_levels()-1);
+	for (; cell != endc; ++cell)
+		if (cell->is_locally_owned()) {
+			local_Vx = 0.0;
+			local_Vy = 0.0;
+			local_weights = 0.0;
+			
+			for (unsigned int vertex=0; vertex<GeometryInfo<2>::vertices_per_cell; ++vertex)
+				for (auto particleIndex = particle_handler.particles_in_cell_begin(cell); 
+	                                   particleIndex != particle_handler.particles_in_cell_end(cell); ++particleIndex ){										   
+					shapeValue = fe.shape_value(vertex, (*particleIndex).second->get_reference_location());
+					
+					local_Vx(vertex) += shapeValue * (*particleIndex).second->get_velocity_component(0);
+					local_Vy(vertex) += shapeValue * (*particleIndex).second->get_velocity_component(1);
+					
+					local_weights(vertex) += shapeValue;
+				}//particle
 				
-			for (auto particleIndex = particle_handler.particles_in_cell_begin(cell); 
-	                                   particleIndex != particle_handler.particles_in_cell_end(cell); ++particleIndex ){
-										   
-				shapeValue = fe.shape_value(vertex, (*particleIndex).second->get_reference_location());
-										   
-				node_velocityX[cell->vertex_dof_index(vertex,0)] += shapeValue * (*particleIndex).second->get_velocity_component(0);
-				node_velocityY[cell->vertex_dof_index(vertex,0)] += shapeValue * (*particleIndex).second->get_velocity_component(1);
-				
-				node_weights[cell->vertex_dof_index(vertex,0)] += shapeValue;			
-			}//particle
-		}//vertex
-	}//cell
+			cell->get_dof_indices (local_dof_indicesV);
+			cell->distribute_local_to_global(local_Vx, node_velocityX);
+			cell->distribute_local_to_global(local_Vy, node_velocityY);
+			cell->distribute_local_to_global(local_weights, node_weights);
+		}
 	
-	for (unsigned int i=0; i<tria.n_vertices(); ++i) {
-		node_velocityX[i] /= node_weights[i];
-		node_velocityY[i] /= node_weights[i];
-	}//i
+	node_velocityX.compress (VectorOperation::add);
+	node_velocityY.compress (VectorOperation::add);
+	node_weights.compress (VectorOperation::add);
+	
+	for(unsigned int i = node_velocityX.local_range().first; i < node_velocityX.local_range().second; ++i){
+		node_velocityX(i) /= node_weights(i);
+		node_velocityY(i) /= node_weights(i);
+	}
+
+	node_velocityX.compress (VectorOperation::insert);
+	node_velocityY.compress (VectorOperation::insert);
+
+	locally_relevant_solutionVx = node_velocityX;
+	locally_relevant_solutionVy = node_velocityY;
+
+	for(std::map<unsigned int, unsigned int>::iterator it = wallsAndBodyDoFs.begin(); it != wallsAndBodyDoFs.end(); ++it){
+		std::set<typename Triangulation<2>::active_cell_iterator> adjacent_cells = particle_handler.vertex_to_cells[it->second];
 		
-	solutionVx = node_velocityX;
-	solutionVy = node_velocityY;
+		double vxValue = locally_relevant_solutionVx(it->first);
+		double vyValue = locally_relevant_solutionVy(it->first);
+		
+		if(std::fabs(vxValue) > 1e-5 || std::fabs(vyValue) > 1e-5)
+			for(auto cell : adjacent_cells)
+				if(cell->is_locally_owned()){
+					int vertexNo = -1;
+					for (unsigned int vertex=0; vertex<GeometryInfo<2>::vertices_per_cell; ++vertex)
+						if(cell->vertex_index(vertex) == it->second){
+							vertexNo = vertex;
+							break;
+						}
+					
+					if(vertexNo == -1) continue;
+				
+					for (auto particleIndex = particle_handler.particles_in_cell_begin(cell); 
+										particleIndex != particle_handler.particles_in_cell_end(cell); ++particleIndex ){										   
+						shapeValue = fe.shape_value(vertexNo, (*particleIndex).second->get_reference_location());
+					
+						(*particleIndex).second->set_velocity_component((*particleIndex).second->get_velocity_component(0) - shapeValue * vxValue, 0);
+						(*particleIndex).second->set_velocity_component((*particleIndex).second->get_velocity_component(1) - shapeValue * vyValue, 1);
+					}//particle
+				}
+		
+		locally_relevant_solutionVx(it->first) = 0.0;
+		locally_relevant_solutionVy(it->first) = 0.0;
+	}
+	
+	locally_relevant_solutionVx.compress (VectorOperation::insert);
+	locally_relevant_solutionVy.compress (VectorOperation::insert);
 	
 	//std::cout << "Finished distributing particles' velocities to grid" << std::endl;	 
 }
@@ -688,47 +957,46 @@ void pfem2Solver::distribute_particle_velocities_to_grid() //перенос ск
 void pfem2Solver::calculate_loads(types::boundary_id patch_id, std::ofstream *out){
 	TimerOutput::Scope timer_section(*timer, "Loads calculation");
 	
-	DoFHandler<2>::active_cell_iterator cell = dof_handlerP.begin_active(), endc = dof_handlerP.end();
-	QGauss<1> face_quadrature_formula(2);
-	FEFaceValues<2> feP_face_values (feP, face_quadrature_formula,
-                                    update_values    | update_normal_vectors |
-                                    update_quadrature_points  | update_JxW_values);
-    const unsigned int   n_face_q_points = face_quadrature_formula.size();
-			
-	double Fx = 0.0, Fy = 0.0, point_valueP;//, Cx, Cy;
+	double Fx_nu(0.0), Fx_p(0.0), Fy_nu(0.0), Fy_p(0.0), point_valueP, dVtdn, Cx_nu, Cx_p, Cy_nu, Cy_p;
 		
-	for (; cell != endc; ++cell) {
-		for (unsigned int face_number=0; face_number < GeometryInfo<2>::faces_per_cell; ++face_number) {
-			if ( (cell->face(face_number)->at_boundary()) &&  (cell->face(face_number)->boundary_id() == patch_id) ) {
-				feP_face_values.reinit (cell, face_number);
-							
-				for (unsigned int q_point=0; q_point < n_face_q_points; ++q_point) {
-					point_valueP = 0.0;
-					
-					for (unsigned int vertex=0; vertex<GeometryInfo<2>::vertices_per_cell; ++vertex){
-						point_valueP += solutionP(cell->vertex_dof_index(vertex,0)) * feP_face_values.shape_value(vertex, q_point);
-					}//vertex
-										
-					Fx += point_valueP * feP_face_values.normal_vector(q_point)[0] * feP_face_values.JxW (q_point);
-					Fy += point_valueP * feP_face_values.normal_vector(q_point)[1] * feP_face_values.JxW (q_point);
-					
-				}//q_index
-			}//if
-		}//face_number
-	}//cell
+	for(const auto &cell : dof_handlerP.active_cell_iterators())
+		if(cell->is_locally_owned())
+			for (unsigned int face_number=0; face_number < GeometryInfo<2>::faces_per_cell; ++face_number)
+				if (cell->face(face_number)->at_boundary() && cell->face(face_number)->boundary_id() == patch_id) {
+					feP_face_values.reinit (cell, face_number);
 
-	//Cx = 2.0 * Fx / (0.1 * 0.1);
-	//Cy = 2.0 * Fy / (0.1 * 0.1);
+					for (unsigned int q_point=0; q_point < n_face_q_points; ++q_point) {
+						point_valueP = 0.0;
+						dVtdn = 0.0;
+
+						for (unsigned int vertex=0; vertex<GeometryInfo<2>::vertices_per_cell; ++vertex){
+							point_valueP += locally_relevant_solutionP(cell->vertex_dof_index(vertex,0)) * feP_face_values.shape_value(vertex, q_point);
+							dVtdn += (locally_relevant_solutionVx(cell->vertex_dof_index(vertex,0)) * feP_face_values.normal_vector(q_point)[1] - locally_relevant_solutionVy(cell->vertex_dof_index(vertex,0)) * feP_face_values.normal_vector(q_point)[0]) *
+									(feP_face_values.shape_grad(vertex, q_point)[0] * feP_face_values.normal_vector(q_point)[0] + feP_face_values.shape_grad(vertex, q_point)[1] * feP_face_values.normal_vector(q_point)[1]);
+						}//vertex
+
+						Fx_nu += mu * dVtdn * feP_face_values.normal_vector(q_point)[1] * feP_face_values.JxW (q_point);
+						Fx_p -= point_valueP * feP_face_values.normal_vector(q_point)[0] * feP_face_values.JxW (q_point);
+						Fy_nu -= mu * dVtdn * feP_face_values.normal_vector(q_point)[0] * feP_face_values.JxW (q_point);
+						Fy_p -= point_valueP * feP_face_values.normal_vector(q_point)[1] * feP_face_values.JxW (q_point);
+					}//q_index
+				}//if
+
+	Cx_nu = 2.0 * Fx_nu / (rho * uMean * uMean * diam);
+	Cx_p = 2.0 * Fx_p / (rho * uMean * uMean * diam);
+	Cy_nu = 2.0 * Fy_nu / (rho * uMean * uMean * diam);
+	Cy_p = 2.0 * Fy_p / (rho * uMean * uMean * diam);
+
+	const double local_coeffs[4] = { Cx_nu, Cx_p, Cy_nu, Cy_p };
+	double global_coeffs[4];
+	
+	Utilities::MPI::sum(local_coeffs, mpi_communicator, global_coeffs);
 		
-	//pressure at the point of flow deceleration
-	double p_point = 0.0;
-	if(probeDoFnumbers.size() == 1) p_point = solutionP(probeDoFnumbers.front());
-	else {
-		for(std::vector<unsigned int>::iterator it = probeDoFnumbers.begin(); it != probeDoFnumbers.end(); ++it) p_point += solutionP(*it);
-		p_point /= probeDoFnumbers.size();
+	if (this_mpi_process == 0){
+		double Cx = global_coeffs[0] + global_coeffs[1];
+		double Cy = global_coeffs[2] + global_coeffs[3];
+		*out << time << "," << Cx << "," << Cy << "," << global_coeffs[0] << "," << global_coeffs[1] << "," << global_coeffs[2] << "," << global_coeffs[3] << std::endl;
 	}
-			
-	*out << time << "," << Fx << "," << Fy << "," << p_point /*<< ";" << Cx << ";" << Cy << ";"*/ << std::endl;
 	
 	//std::cout << "Calculating loads finished" << std::endl;
 }

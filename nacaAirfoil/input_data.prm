@@ -5,6 +5,11 @@ subsection Liquid characteristics
 	set Density = 1.0 
 end
 
+subsection Free-stream flow
+	set Velocity = 10.0
+	set Angle of attack = 4.0
+end
+
 #subsection Domain split
 #	set Number of partitiones in the x direction = 32
 #	set Number of partitiones in the y direction = 32
@@ -14,7 +19,7 @@ subsection Time parameters
 	set Initial time = 0.0
 	set Time step = 0.001
 	set Number of time step = 1 #???????????????
-	set Final Time = 150.0
+	set Final Time = 10.0
 end
 
 subsection Solver parameters
@@ -43,5 +48,5 @@ subsection The criterion of record in the file
 end
 
 subsection The file with mesh
-	set Name of the file = nacaAirfoil.unv
+	set Name of the file = airfoilMeshFine.unv
 end
