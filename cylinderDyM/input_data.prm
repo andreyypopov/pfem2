@@ -1,7 +1,7 @@
 #
 
 subsection Liquid characteristics
-	set Dynamic viscosity = 0.003333333 
+	set Dynamic viscosity = 0.02 
 	set Density           = 1.0 
 end
 
@@ -12,9 +12,9 @@ end
 
 subsection Time parameters
 	set Initial time        = 0.0
-	set Time step           = 0.02
+	set Time step           = 0.0025
 	set Number of time step = 1 #???????????????
-	set Final Time          = 500.0
+	set Final Time          = 100.0
 end
 
 subsection Solver parameters
@@ -39,17 +39,17 @@ subsection Particles
 end
 
 subsection The criterion of record in the file
-	set Number of data to be recorded = 100
+	set Number of data to be recorded = 400
 end
 
 subsection The file with mesh
-	set Name of the file = scaled3.unv
+	set Name of the file = bigmesh2.unv
 end
 
 subsection FSI parameters
-	set Lame parameter lambda = 115384615385
-	set Lame parameter mu     = 76923076923
-	set Spring constant       = 61.91
+	set Lame parameter lambda = 0.577
+	set Lame parameter mu     = 0.385
+	set Spring constant       = 556.41
 	set Damping coefficient	  = 0.731
 	set Body material density = 50.0
 	set Body surface area	  = 0.785398163

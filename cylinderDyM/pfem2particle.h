@@ -2,7 +2,7 @@
 #define PFEM2PARTICLE_H
 
 #define PARTICLES_MOVEMENT_STEPS 3
-#define MAX_PARTICLES_PER_CELL_PART 3
+#define MAX_PARTICLES_PER_CELL_PART 10
 
 #include <iostream>
 #include <fstream>
@@ -24,10 +24,14 @@
 #include <deal.II/fe/fe_system.h>
 #include <deal.II/fe/fe_values.h>
 
+#include <deal.II/lac/trilinos_sparse_matrix.h>
+#include <deal.II/lac/trilinos_vector.h>
+#include <deal.II/lac/trilinos_solver.h>
+#include <deal.II/lac/trilinos_precondition.h>
+
 #include <deal.II/fe/mapping_q1.h>
 #include <deal.II/base/subscriptor.h>
-
-#include <deal.II/lac/constraint_matrix.h>
+#include <deal.II/base/parameter_handler.h>
 
 using namespace dealii;
 
@@ -35,7 +39,8 @@ class pfem2Particle
 {
 public:
 	pfem2Particle(const Point<2> & location,const Point<2> & reference_location,const unsigned int id);
-		
+	pfem2Particle(const void*& begin_data);
+
 	void set_location (const Point<2> &new_location);
 	const Point<2> & get_location () const;
 	
@@ -62,6 +67,10 @@ public:
 	
 	unsigned int find_closest_vertex_of_cell(const typename Triangulation<2>::active_cell_iterator &cell, const Mapping<2> &mapping);
 	
+	std::size_t serialized_size_in_bytes() const;
+
+	void write_data(void*& data) const;
+
 private:
 	Point<2> location;
 	Point<2> reference_location;
@@ -95,6 +104,13 @@ public:
     unsigned int n_particles_in_cell(const typename Triangulation<2>::active_cell_iterator &cell) const;
     
     void sort_particles_into_subdomains_and_cells();
+
+#ifdef DEAL_II_WITH_MPI
+	void send_recv_particles(const std::map<unsigned int, std::vector<std::unordered_multimap<int, pfem2Particle*>::iterator>>& particles_to_send,
+		std::unordered_multimap<int, pfem2Particle*>& received_particles,
+		const std::map<unsigned int, std::vector<typename Triangulation<2>::active_cell_iterator> >& new_cells_for_particles =
+		std::map<unsigned int, std::vector<typename Triangulation<2>::active_cell_iterator> >());
+#endif
     
     std::unordered_multimap<int, pfem2Particle*>::iterator begin();
     std::unordered_multimap<int, pfem2Particle*>::iterator end();
@@ -102,6 +118,11 @@ public:
     std::unordered_multimap<int, pfem2Particle*>::iterator particles_in_cell_begin(const typename Triangulation<2>::active_cell_iterator &cell);
     std::unordered_multimap<int, pfem2Particle*>::iterator particles_in_cell_end(const typename Triangulation<2>::active_cell_iterator &cell);
     
+	std::vector<std::set<typename Triangulation<2>::active_cell_iterator>> vertex_to_cells;
+	std::vector<std::vector<Tensor<1, 2>>> vertex_to_cell_centers;
+
+	void initialize_maps();
+
 private:
     SmartPointer<const parallel::distributed::Triangulation<2>, pfem2ParticleHandler> triangulation;
     SmartPointer<const Mapping<2>,pfem2ParticleHandler> mapping;
@@ -126,6 +147,15 @@ struct meshNode {
 	bool isBoundaryNode;//!< Узел является граничным (для таких узлов только обновляются координаты, но не выполняется обновление ячейки-родителя и переинтерполяция полей)
 };
 
+/*!
+ *  \brief Структура "граничный узел со степенью свободы"
+ *  \rem Номер узла сетки (triangulation) - ключ в контейнере узлов сетки
+ */
+struct boundaryDoF {
+	int dofScalarIndex;	//!< Индекс степени свободы для скалярных полей (Vx, Vy, P)
+	int boundaryId;		//!< ID участка границы
+};
+
 class pfem2Solver
 {
 public:
@@ -134,12 +164,11 @@ public:
 	
 	virtual void build_grid() = 0;
 	virtual void setup_system() = 0;
-	virtual void assemble_system() = 0;
 	virtual void solveVx(bool correction = false) = 0;
 	virtual void solveVy(bool correction = false) = 0;
 	virtual void solveP() = 0;
 	virtual void solveU() = 0;
-	virtual void output_results(bool predictionCorrection = false) = 0;
+	virtual void output_results(bool predictionCorrection = false, bool exportParticles = false) = 0;
 	
 	/*!
 	 * \brief Процедура первоначального "посева" частиц в ячейках сетки
@@ -179,8 +208,12 @@ public:
 	double time,time_step;							//!< Шаг решения задачи методом конечных элементов
 	int timestep_number;
 	
-	Vector<double> solutionVx, solutionVy, solutionP, correctionVx, correctionVy, predictionVx, predictionVy, solutionU;	//!< Вектор решения, коррекции и прогноза на текущем шаге по времени
-	Vector<double> old_solutionVx, old_solutionVy, old_solutionP;		//!< Вектор решения на предыдущем шаге по времени (используется для вычисления разности с текущим и последующей коррекции скоростей частиц)
+	//!< Вектор решения (на текущем и предыдущем шаге по времени) и прогноза (на текущем шаге)
+	TrilinosWrappers::MPI::Vector locally_relevant_solutionVx, locally_relevant_solutionVy, locally_relevant_solutionP, 
+		locally_relevant_predictionVx, locally_relevant_predictionVy, locally_relevant_old_solutionVx, locally_relevant_old_solutionVy, locally_relevant_old_solutionP, locally_relevant_solutionU,
+		locally_relevant_vorticity;
+
+	MPI_Comm mpi_communicator;
 	
 	double force_Fy;
 	
@@ -188,20 +221,53 @@ public:
 	MappingQ1<2> mapping;
 	
 	pfem2ParticleHandler particle_handler;
-	FE_Q<2>  			 feVx, feVy, feP, feU;
+	FE_Q<2>  			 feV, feP, feU;
 	FESystem<2> 		 fe, fe2d;
-	DoFHandler<2>        dof_handlerVx, dof_handlerVy, dof_handlerP, dof_handlerU;
+	DoFHandler<2>        dof_handlerV, dof_handlerP, dof_handlerU;
 	TimerOutput			 *timer;
 	
-	ConstraintMatrix hanging_node_constraints;
-	
 	std::vector<unsigned int> probeDoFnumbers;
+
+	QGauss<2>   quadrature_formula;
+	QGauss<1>   face_quadrature_formula;
+
+	FEValues<2> feV_values, feP_values, feU_values;
+	FEFaceValues<2> feV_face_values, feP_face_values;
+
+	const unsigned int dofs_per_cellV, dofs_per_cellP, dofs_per_cellU;
+	std::vector<types::global_dof_index> local_dof_indicesV, local_dof_indicesP, local_dof_indicesU;
+
+	const unsigned int n_mpi_processes;
+	const unsigned int this_mpi_process;
+
+	ConditionalOStream 	 pcout;
+
+	IndexSet locally_owned_dofsV, locally_owned_dofsP, locally_owned_dofsU;
+	IndexSet locally_relevant_dofsV, locally_relevant_dofsP, locally_relevant_dofsU;
+
+	AffineConstraints<double>  constraintsVx, constraintsVy, constraintsP, constraintsPredVx, constraintsPredVy, constraintsU;
+
+	const unsigned int n_q_points;
+	const unsigned int n_face_q_points;
+
+	std::map<unsigned int, boundaryDoF> wallsAndBodyDoFs;
+	std::map<unsigned int, boundaryDoF> DirichletBoundaryDoFs;
+
+	double body_y_, body_velVy_;
 	
 protected:
 	void seed_particles_into_cell (const typename DoFHandler<2>::cell_iterator &cell);
 	bool check_cell_for_empty_parts (const typename DoFHandler<2>::cell_iterator &cell);
 	
+	double mu, rho;
+	double diam, uMean;
+	int xaDoF, xeDoF;
+	
+	ParameterHandler prm;
+
 	void check_empty_cells();	//!< Проверка наличия пустых ячеек (без частиц) и размещение в них частиц
+	
+	void calculate_vorticity();
 	
 	//работа с подвижной сеткой
 	/*!
